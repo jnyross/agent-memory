@@ -615,15 +615,6 @@ def input_sizes(home):
     return sizes
 
 
-def sources_newer(home, mem_path):
-    if not os.path.exists(mem_path):
-        return True
-    prev = (load_state(home).get("_meta") or {}).get("merge_inputs")
-    if not isinstance(prev, dict):
-        return True
-    return input_sizes(home) != prev
-
-
 def read_jsonl_records(path, seen, rows, errors):
     try:
         fh = open(path, "r", encoding="utf-8")
@@ -696,17 +687,15 @@ def cmd_merge(_args):
 
 def _merge(home):
     mem_path = os.path.join(home, "memory.jsonl")
-    if not sources_newer(home, mem_path):
-        return 0
-    host = host_id()
-    paths = sorted(discover((os.path.join(home, "in", "*.jsonl"),)))
-    own = out_path(home, host)
-    if os.path.isfile(own) and own not in paths:
-        paths.append(own)
+    sizes = input_sizes(home)
+    if os.path.exists(mem_path):
+        prev = (load_state(home).get("_meta") or {}).get("merge_inputs")
+        if isinstance(prev, dict) and sizes == prev:
+            return 0
     seen = set()
     rows = []
     errors = []
-    for path in paths:
+    for path in sorted(sizes):
         read_jsonl_records(path, seen, rows, errors)
     rows.sort(key=lambda rec: (rec.get("ts") or "", rec.get("key") or ""))
     tmp = mem_path + ".tmp"
@@ -721,7 +710,7 @@ def _merge(home):
     meta = state.get("_meta") or {}
     if errors:
         meta["errors"] = list(meta.get("errors") or []) + errors
-    meta["merge_inputs"] = input_sizes(home)
+    meta["merge_inputs"] = sizes
     state["_meta"] = meta
     save_state(home, state)
     return 0

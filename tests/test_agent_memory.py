@@ -279,6 +279,7 @@ class MemoryTest(unittest.TestCase):
             )
         self.capture()
         self.assertEqual(load_out(self.home, "johns-macbook-air"), [])
+        self.assertEqual(am.load_state(self.home).get("_meta", {}).get("malformed"), 0)
         state = am.load_state(self.home)
         offset = state[path]["offset"]
         with open(path, "a", encoding="utf-8") as fh:
@@ -287,6 +288,7 @@ class MemoryTest(unittest.TestCase):
         rows = load_out(self.home, "johns-macbook-air")
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["text"], "half")
+        self.assertEqual(am.load_state(self.home).get("_meta", {}).get("malformed"), 0)
         self.assertGreater(am.load_state(self.home)[path]["offset"], offset)
 
     def test_truncation_reset_and_merge_dedupe(self):
@@ -366,6 +368,36 @@ class MemoryTest(unittest.TestCase):
             hosts = sorted(json.loads(line)["host"] for line in fh)
         self.assertEqual(hosts, ["agent-box", "mbp"])
         self.assertEqual(am.main(["merge"]), 0)
+
+    def test_merge_picks_up_append_to_already_merged_file(self):
+        os.environ["AGENT_MEMORY_HOST"] = "agent-box"
+        os.environ["AGENT_MEMORY_ROLE"] = "hub"
+        os.makedirs(os.path.join(self.home, "out"), exist_ok=True)
+        os.makedirs(os.path.join(self.home, "in"), exist_ok=True)
+        rec1 = {
+            "host": "mini",
+            "key": "omp/s/1",
+            "path": "x",
+            "role": "user",
+            "runtime": "omp",
+            "session_id": "s",
+            "text": "first",
+            "ts": "2026-09-01T12:00:00.000Z",
+        }
+        rec2 = dict(rec1)
+        rec2["key"] = "omp/s/2"
+        rec2["text"] = "second"
+        rec2["ts"] = "2026-09-01T12:00:01.000Z"
+        path = os.path.join(self.home, "in", "mini.jsonl")
+        dump(path, [rec1])
+        self.assertEqual(am.main(["merge"]), 0)
+        dump(path, [rec1, rec2])
+        self.assertEqual(am.main(["merge"]), 0)
+        mem = os.path.join(self.home, "memory.jsonl")
+        with open(mem, "r", encoding="utf-8") as fh:
+            texts = [json.loads(line)["text"] for line in fh]
+        self.assertEqual(texts, ["first", "second"])
+
 
 
     def test_sqlite_hermes_and_opencode(self):
