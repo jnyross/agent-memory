@@ -48,8 +48,10 @@ fi
 if [ "$os" = Linux ]; then
   if on "$name" "systemctl --user show-environment" >/dev/null 2>&1; then
     pass "$name systemctl --user"
+  elif on "$name" "command -v crontab" >/dev/null 2>&1; then
+    pass "$name crontab"
   else
-    fail "$name systemctl --user" "show-environment failed"
+    fail "$name scheduler" "neither systemctl --user nor crontab available"
   fi
 fi
 
@@ -84,10 +86,12 @@ got=$(on "$name" "$bin status 2>/dev/null | jq -r .host")
 
 case $os in
   Linux)
-    if [ "$(on "$name" "systemctl --user is-active agent-memory.timer")" = active ]; then
+    if [ "$(on "$name" "systemctl --user is-active agent-memory.timer 2>/dev/null")" = active ]; then
       pass "$name timer active"
+    elif on "$name" "crontab -l 2>/dev/null | grep -q 'agent-memory cycle'"; then
+      pass "$name cron active"
     else
-      fail "$name timer" "not active"
+      fail "$name scheduler" "neither timer nor cron active"
     fi
     ;;
   Darwin)

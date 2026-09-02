@@ -25,39 +25,47 @@ chmod +x "$BIN/agent-memory" "$LIB/agent_memory.py"
 
 UNAME=$(uname)
 if [ "$UNAME" = "Linux" ]; then
-  mkdir -p "${HOME}/.config/systemd/user"
-  {
-    printf '%s\n' '[Unit]'
-    printf '%s\n' 'Description=Capture and synchronize agent memory'
-    printf '%s\n' 'After=network-online.target'
-    printf '%s\n' ''
-    printf '%s\n' '[Service]'
-    printf '%s\n' 'Type=oneshot'
-    printf '%s\n' 'ExecStart=%h/.local/bin/agent-memory cycle'
-    printf '%s\n' 'Nice=10'
-    printf '%s\n' 'IOSchedulingClass=idle'
-    printf '%s\n' ''
-    printf '%s\n' '[Install]'
-    printf '%s\n' 'WantedBy=default.target'
-  } > "${HOME}/.config/systemd/user/agent-memory.service"
+  if systemctl --user show-environment >/dev/null 2>&1; then
+    mkdir -p "${HOME}/.config/systemd/user"
+    {
+      printf '%s\n' '[Unit]'
+      printf '%s\n' 'Description=Capture and synchronize agent memory'
+      printf '%s\n' 'After=network-online.target'
+      printf '%s\n' ''
+      printf '%s\n' '[Service]'
+      printf '%s\n' 'Type=oneshot'
+      printf '%s\n' 'ExecStart=%h/.local/bin/agent-memory cycle'
+      printf '%s\n' 'Nice=10'
+      printf '%s\n' 'IOSchedulingClass=idle'
+      printf '%s\n' ''
+      printf '%s\n' '[Install]'
+      printf '%s\n' 'WantedBy=default.target'
+    } > "${HOME}/.config/systemd/user/agent-memory.service"
 
-  {
-    printf '%s\n' '[Unit]'
-    printf '%s\n' 'Description=Run agent-memory every minute'
-    printf '%s\n' ''
-    printf '%s\n' '[Timer]'
-    printf '%s\n' 'OnBootSec=30s'
-    printf '%s\n' 'OnUnitActiveSec=60s'
-    printf '%s\n' 'RandomizedDelaySec=10s'
-    printf '%s\n' 'Persistent=true'
-    printf '%s\n' ''
-    printf '%s\n' '[Install]'
-    printf '%s\n' 'WantedBy=timers.target'
-  } > "${HOME}/.config/systemd/user/agent-memory.timer"
+    {
+      printf '%s\n' '[Unit]'
+      printf '%s\n' 'Description=Run agent-memory every minute'
+      printf '%s\n' ''
+      printf '%s\n' '[Timer]'
+      printf '%s\n' 'OnBootSec=30s'
+      printf '%s\n' 'OnUnitActiveSec=60s'
+      printf '%s\n' 'RandomizedDelaySec=10s'
+      printf '%s\n' 'Persistent=true'
+      printf '%s\n' ''
+      printf '%s\n' '[Install]'
+      printf '%s\n' 'WantedBy=timers.target'
+    } > "${HOME}/.config/systemd/user/agent-memory.timer"
 
-  systemctl --user daemon-reload
-  systemctl --user enable --now agent-memory.timer
-
+    systemctl --user daemon-reload
+    systemctl --user enable --now agent-memory.timer
+  elif command -v crontab >/dev/null 2>&1; then
+    mkdir -p "${SHARE}/logs"
+    cron_job="* * * * * ${BIN}/agent-memory cycle >> ${SHARE}/logs/cycle.log 2>&1"
+    (crontab -l 2>/dev/null | grep -Fv "agent-memory cycle"; echo "$cron_job") | crontab -
+  else
+    printf '%s\n' "neither systemctl --user nor crontab available" >&2
+    exit 1
+  fi
 elif [ "$UNAME" = "Darwin" ]; then
   mkdir -p "${HOME}/Library/LaunchAgents"
   PLIST="${HOME}/Library/LaunchAgents/io.johnross.agent-memory.plist"

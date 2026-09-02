@@ -103,7 +103,7 @@ Install agent-memory on this machine from https://github.com/jnyross/agent-memor
 1. Check prerequisites:
    - python3 >= 3.9: python3 -V
    - rsync: command -v rsync
-   - Linux with a systemd user session or macOS
+   - Linux (systemd user session or crontab) or macOS
 
 2. Clone and enter the repository:
    git clone https://github.com/jnyross/agent-memory.git
@@ -113,6 +113,7 @@ Install agent-memory on this machine from https://github.com/jnyross/agent-memor
 
 4. Install the service:
    AGENT_MEMORY_HOST=<device-name> sh install.sh
+   (If no systemd user session is available, install.sh automatically sets up a minutely cron job.)
 
 5. Ensure you have an SSH key:
    [ -f ~/.ssh/id_ed25519.pub ] || ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519
@@ -136,12 +137,15 @@ EOF
    Confirm "host" matches <device-name> and "errors" is [].
 
    Until step 8 is complete, the 60 second cycle logs push and pull errors. That is expected.
-8. Handoff: Print your public key (cat ~/.ssh/id_ed25519.pub) and chosen <device-name>.
-   Inform the operator to:
-   a. Append your public key to agent-box:~/.ssh/authorized_keys
-   b. Add "<device-name> leaf" to the fleet file, commit, and push
-   Once authorized, test the connection with: ssh -o BatchMode=yes agent-box true
-```
+8. Test hub access and hand off:
+   Test connection to hub:
+   ssh -o BatchMode=yes agent-box true
+
+   - If it succeeds (e.g. over Tailscale SSH), no key authorization is needed.
+     Just inform the operator to add "<device-name> leaf" to the fleet file.
+   - If it fails (Permission denied), print your public key (`cat ~/.ssh/id_ed25519.pub`)
+     and inform the operator to append it to agent-box:~/.ssh/authorized_keys
+     and add "<device-name> leaf" to the fleet file.
 
 ### Path B. Push-install from an existing machine
 
