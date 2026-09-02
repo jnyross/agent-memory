@@ -97,6 +97,9 @@ Copy and paste this instruction directly to the agent running on the target mach
 ```text
 Install agent-memory on this machine from https://github.com/jnyross/agent-memory:
 
+0. Stop if this machine is already enrolled:
+   [ -e ~/.local/bin/agent-memory ] && { echo "already installed as $(grep -o 'AGENT_MEMORY_HOST:=[^}]*' ~/.local/bin/agent-memory)"; exit 1; }
+
 1. Check prerequisites:
    - python3 >= 3.9: python3 -V
    - rsync: command -v rsync
@@ -132,6 +135,7 @@ EOF
    ~/.local/bin/agent-memory status
    Confirm "host" matches <device-name> and "errors" is [].
 
+   Until step 8 is complete, the 60 second cycle logs push and pull errors. That is expected.
 8. Handoff: Print your public key (cat ~/.ssh/id_ed25519.pub) and chosen <device-name>.
    Inform the operator to:
    a. Append your public key to agent-box:~/.ssh/authorized_keys

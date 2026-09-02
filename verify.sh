@@ -98,20 +98,6 @@ check_hub_timing() {
   fi
 }
 
-check_old_install_gone() {
-  for h in $(fleet_hosts); do
-    if is_mac "$h"; then
-      c=$(on "$h" 'ls $HOME/Library/LaunchAgents | grep -c agent-archive')
-      [ "$c" = 0 ] && pass "$h no agent-archive plist" || fail "$h agent-archive plist" "$c present"
-    else
-      c=$(on "$h" 'systemctl --user list-unit-files 2>/dev/null | grep -c john-agent-archive')
-      [ "$c" = 0 ] && pass "$h no john-agent-archive units" || fail "$h john-agent-archive units" "$c present"
-    fi
-    c=$(on "$h" 'ls -d $HOME/.local/lib/john-agent-archive $HOME/.local/bin/john-archive $HOME/.config/john-agent-archive 2>/dev/null | wc -l' | digits)
-    [ "$c" = 0 ] && pass "$h old archive code removed" || fail "$h old archive code" "$c paths remain"
-    on "$h" 'test -d $HOME/.local/share/john-agent-archive' && pass "$h old archive data kept" || fail "$h old archive data" "missing"
-  done
-}
 
 check_fan_out() {
   deadline=$(( $(date +%s) + FAN_OUT_DEADLINE ))
@@ -136,7 +122,6 @@ if [ "${1:-}" != --local ]; then
   check_wrappers
   check_hub_state
   check_hub_timing
-  check_old_install_gone
   check_fan_out
 fi
 

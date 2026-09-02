@@ -97,17 +97,3 @@ else
   exit 1
 fi
 
-if [ "$UNAME" = "Linux" ]; then
-  systemctl --user disable --now john-agent-archive-cycle.timer john-agent-archive-cycle.service >/dev/null 2>&1 || true
-  rm -f "${HOME}/.config/systemd/user/john-agent-archive-cycle.service" "${HOME}/.config/systemd/user/john-agent-archive-cycle.timer"
-  systemctl --user daemon-reload
-elif [ "$UNAME" = "Darwin" ]; then
-  launchctl bootout "gui/${UID_NUM}/io.johnross.agent-archive.cycle" >/dev/null 2>&1 || true
-  rm -f "${HOME}/Library/LaunchAgents/io.johnross.agent-archive.cycle.plist"
-fi
-rm -rf "${HOME}/.local/lib/john-agent-archive" "${HOME}/.config/john-agent-archive"
-rm -f "${HOME}/.local/bin/john-archive"
-rm -f "${SHARE}/hosts.json"
-if [ "$ROLE" = "hub" ]; then
-  rm -f "${SHARE}/in/agent-box.jsonl"
-fi
