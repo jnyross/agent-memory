@@ -1,5 +1,5 @@
 #!/bin/sh
-# sh verify.sh          full fleet check (needs ssh to agent-box, mini, mbp)
+# sh verify.sh          full fleet check (needs ssh to every host in fleet)
 # sh verify.sh --local  tests, hub simulation, git state only
 set -u
 cd "$(dirname "$0")"

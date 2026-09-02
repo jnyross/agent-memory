@@ -59,11 +59,11 @@ AGENT_MEMORY_HOST=mbp sh install.sh
 AGENT_MEMORY_HOST=johns-macbook-air sh install.sh
 ```
 
-Or roll out the whole fleet from a clean checkout with `sh deploy.sh` (it refuses to run unless the working tree is clean and `HEAD` is `origin/main`).
+Or roll out the whole fleet from a clean checkout with `sh deploy.sh`. It refuses to run unless the working tree is clean and `HEAD` is `origin/main`. Host names come from `fleet`.
 
-Linux gets a user systemd timer every 60s. macOS gets `io.johnross.agent-memory`. `install.sh` removes the old `john-agent-archive` units, plist, code and CLI; raw data under `~/.local/share/john-agent-archive` is left in place.
+Linux gets a user systemd timer every 60s. macOS gets `io.johnross.agent-memory`. `install.sh` removes the old `john-agent-archive` units, plist, code and CLI. Raw data under `~/.local/share/john-agent-archive` is left in place.
 
-Rollout order is hub first, then `mini`, `mbp`, local.
+Rollout order is the hub first, then the other remotes, then this machine.
 
 ## Tests
 
@@ -79,7 +79,7 @@ After you change `agent_memory.py` or `install.sh`, run:
 sh verify.sh --local
 ```
 
-After `sh deploy.sh`, run the fleet check (needs ssh to `agent-box`, `mini`, and `mbp`):
+After `sh deploy.sh`, run the fleet check (needs ssh to every host in `fleet`):
 
 ```console
 sh verify.sh
@@ -88,3 +88,16 @@ sh verify.sh
 Each line is `PASS` or `FAIL`. The script exits 1 if any check fails. Fix the source and redeploy. Do not edit `verify.sh` or the tests to make a check pass.
 
 The first hub cycle after `merge.sqlite` is deleted takes about 40 seconds and fails the timing check once. Wait for the next cycle, then run `sh verify.sh` again.
+
+## Onboard a device
+
+To add a machine, a Grok bot for example:
+
+1. Add a row to `fleet`. The first column is the ssh alias and `AGENT_MEMORY_HOST`. The second is `hub` or `leaf`.
+2. Commit and push.
+3. Create an ssh alias for that name on the machine that runs `onboard.sh`.
+4. Run `sh onboard.sh <name>`.
+
+The script checks Python 3.9, rsync, and the OS. It sets up hub ssh if that is missing. It runs `deploy.sh` for that host. It waits until `memory.jsonl` matches the hub.
+
+Then run `sh verify.sh`. That script reads `fleet`.

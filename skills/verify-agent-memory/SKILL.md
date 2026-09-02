@@ -7,7 +7,7 @@ description: "Drive the agent-memory CLI the way a user does: isolated capture, 
 
 Primary surface is the CLI `python3 agent_memory.py` (installed as `~/.local/bin/agent-memory`). There is no server. Isolate every feature drive with a throwaway directory. Never set `AGENT_MEMORY_HOME` to `~/.local/share/agent-memory` for those drives.
 
-The live four-host fleet is a separate check. Use `sh verify.sh` at the repo root for that. Do not mix fleet ssh into an isolated drive.
+The live fleet is a separate check. Use `sh verify.sh` at the repo root for that. Do not mix fleet ssh into an isolated drive.
 
 Repo root: `~/Work/agent-memory`.
 
@@ -46,7 +46,7 @@ cd ~/Work/agent-memory
 sh verify.sh --local
 ```
 
-Full fleet (ssh to `agent-box`, `mini`, `mbp`):
+Full fleet (ssh to every host in `fleet`):
 
 ```bash
 cd ~/Work/agent-memory
@@ -83,6 +83,8 @@ Only remove the run directory this run created. Do not kill by process name. Do 
 
 `skills/verify-agent-memory/drive.sh` is executable. Invocation is under Launch and Drive.
 
-`verify.sh` at the repo root is executable. `--local` is tests, hub simulation, and git state. Full run is the deployed fleet. A line is `PASS` or `FAIL`. Exit 1 on any FAIL. On FAIL, fix source, commit, `git push origin main`, `sh deploy.sh`. Do not edit `verify.sh` or tests to make a check pass.
+`verify.sh` at the repo root is executable. `--local` is tests, hub simulation, and git state. Full run is the deployed fleet in `fleet`. A line is `PASS` or `FAIL`. Exit 1 on any FAIL. On FAIL, fix source, commit, `git push origin main`, `sh deploy.sh`. Do not edit `verify.sh` or tests to make a check pass.
 
 The first hub cycle after `merge.sqlite` is deleted takes about 40 seconds and fails the fleet timing check once. Wait one more cycle, then rerun `sh verify.sh`.
+
+`onboard.sh <name>` at the repo root is executable. The name must already be a row in `fleet` and reachable by ssh from this machine. After it passes, `sh verify.sh` includes that host.
