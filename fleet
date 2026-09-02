@@ -1,0 +1,5 @@
+# fleet membership: <ssh-alias> <hub|leaf>
+agent-box hub
+mini leaf
+mbp leaf
+johns-macbook-air leaf

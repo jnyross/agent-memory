@@ -4,26 +4,13 @@
 set -u
 cd "$(dirname "$0")"
 
-FLEET="agent-box mini mbp local"
-HUB=agent-box
-LOCAL_NAME=johns-macbook-air
+. ./lib.sh
+HUB=$(fleet_hub)
 SHARE='$HOME/.local/share/agent-memory'
 BIN='$HOME/.local/bin/agent-memory'
 FAN_OUT_DEADLINE=150
 MAX_CYCLE_SECS=10
 
-fails=0
-pass() { printf 'PASS %s\n' "$1"; }
-fail() { printf 'FAIL %s: %s\n' "$1" "$2"; fails=$((fails + 1)); }
-digits() { tr -cd '0-9'; }
-
-name_of() { [ "$1" = local ] && echo "$LOCAL_NAME" || echo "$1"; }
-on() {
-  h=$1; shift
-  if [ "$h" = local ]; then sh -c "$*"; else ssh -o BatchMode=yes -o ConnectTimeout=10 "$h" "$*"; fi
-}
-md5_of() { on "$1" "md5sum $2 2>/dev/null | cut -c1-32 || md5 -q $2"; }
-is_mac() { on "$1" uname | grep -q Darwin; }
 
 check_tests() {
   out=$(python3 -m unittest discover -s tests 2>&1)
@@ -58,15 +45,15 @@ check_git() {
 
 check_deployed_code() {
   want=$(git show origin/main:agent_memory.py | md5sum | cut -c1-32)
-  for h in $FLEET; do
+  for h in $(fleet_hosts); do
     got=$(md5_of "$h" '$HOME/.local/lib/agent-memory/agent_memory.py')
     [ "$got" = "$want" ] && pass "$h runs origin/main agent_memory.py" || fail "$h agent_memory.py md5" "got $got want $want"
   done
 }
 
 check_wrappers() {
-  for h in $FLEET; do
-    n=$(name_of "$h")
+  for h in $(fleet_hosts); do
+    n=$h
     w=$(on "$h" "cat $BIN")
     case "$w" in *"AGENT_MEMORY_HOST:=$n}"*) pass "$h wrapper host $n";; *) fail "$h wrapper host" "$w";; esac
     if [ "$h" = "$HUB" ]; then
@@ -86,8 +73,9 @@ check_hub_state() {
   [ "$errs" = 0 ] && pass "hub status.errors empty" || fail "hub status.errors" "$(printf '%s' "$st" | jq -c .errors)"
   keys=$(on $HUB "python3 -c \"import os,sqlite3;print(sqlite3.connect(os.path.expanduser('~/.local/share/agent-memory/memory.sqlite')).execute('select count(*) from keys').fetchone()[0])\"")
   [ "$keys" = "$lines" ] && pass "hub memory.sqlite keys == memory_lines ($lines)" || fail "hub keys == lines" "keys=$keys lines=$lines"
-  hosts=$(on $HUB "jq -r .host $SHARE/memory.jsonl | sort -u | wc -l" | digits)
-  [ "$hosts" = 4 ] && pass "hub memory.jsonl has 4 hosts" || fail "hub memory.jsonl hosts" "$hosts"
+  got=$(on $HUB "jq -r .host $SHARE/memory.jsonl | sort -u")
+  want=$(on $HUB "for f in $SHARE/out/*.jsonl $SHARE/in/*.jsonl; do [ -s \"\$f\" ] && basename \"\$f\" .jsonl; done | sort -u")
+  [ "$got" = "$want" ] && pass "hub memory.jsonl hosts match transfers" || fail "hub memory.jsonl hosts" "jsonl=[$(printf '%s' "$got" | tr '\n' ' ')] files=[$(printf '%s' "$want" | tr '\n' ' ')]"
   dupes=$(on $HUB "jq -r .key $SHARE/memory.jsonl | sort | uniq -d | wc -l" | digits)
   [ "$dupes" = 0 ] && pass "hub memory.jsonl no duplicate keys" || fail "hub duplicate keys" "$dupes"
   stale=$(on $HUB "ls $SHARE/hosts.json $SHARE/in/$HUB.jsonl 2>/dev/null | wc -l" | digits)
@@ -111,7 +99,7 @@ check_hub_timing() {
 }
 
 check_old_install_gone() {
-  for h in $FLEET; do
+  for h in $(fleet_hosts); do
     if is_mac "$h"; then
       c=$(on "$h" 'ls $HOME/Library/LaunchAgents | grep -c agent-archive')
       [ "$c" = 0 ] && pass "$h no agent-archive plist" || fail "$h agent-archive plist" "$c present"
@@ -130,7 +118,7 @@ check_fan_out() {
   while :; do
     hub=$(md5_of $HUB "$SHARE/memory.jsonl")
     behind=
-    for h in $FLEET; do
+    for h in $(fleet_hosts); do
       [ "$h" = "$HUB" ] && continue
       [ "$(md5_of "$h" "$SHARE/memory.jsonl")" = "$hub" ] || behind="$behind $h"
     done
