@@ -605,14 +605,23 @@ def source_paths(home):
     return paths
 
 
+def input_sizes(home):
+    sizes = {}
+    for path in source_paths(home):
+        try:
+            sizes[path] = os.path.getsize(path)
+        except OSError:
+            continue
+    return sizes
+
+
 def sources_newer(home, mem_path):
     if not os.path.exists(mem_path):
         return True
-    mem_mtime = os.path.getmtime(mem_path)
-    for path in source_paths(home):
-        if os.path.getmtime(path) > mem_mtime:
-            return True
-    return False
+    prev = (load_state(home).get("_meta") or {}).get("merge_inputs")
+    if not isinstance(prev, dict):
+        return True
+    return input_sizes(home) != prev
 
 
 def read_jsonl_records(path, seen, rows, errors):
@@ -708,12 +717,13 @@ def _merge(home):
         os.fsync(fh.fileno())
     os.replace(tmp, mem_path)
     rebuild_fts(home, rows)
+    state = load_state(home)
+    meta = state.get("_meta") or {}
     if errors:
-        state = load_state(home)
-        meta = state.get("_meta") or {}
         meta["errors"] = list(meta.get("errors") or []) + errors
-        state["_meta"] = meta
-        save_state(home, state)
+    meta["merge_inputs"] = input_sizes(home)
+    state["_meta"] = meta
+    save_state(home, state)
     return 0
 
 

@@ -330,6 +330,44 @@ class MemoryTest(unittest.TestCase):
         self.assertEqual(len(merged), 1)
         self.assertEqual(merged[0]["key"], key)
 
+    def test_merge_includes_source_with_older_mtime(self):
+        os.environ["AGENT_MEMORY_HOST"] = "agent-box"
+        os.environ["AGENT_MEMORY_ROLE"] = "hub"
+        os.makedirs(os.path.join(self.home, "out"), exist_ok=True)
+        os.makedirs(os.path.join(self.home, "in"), exist_ok=True)
+
+        def rec(host, key, text, ts):
+            return {
+                "host": host,
+                "key": key,
+                "path": "x",
+                "role": "user",
+                "runtime": "omp",
+                "session_id": "s",
+                "text": text,
+                "ts": ts,
+            }
+
+        dump(
+            os.path.join(self.home, "out", "agent-box.jsonl"),
+            [rec("agent-box", "omp/s/box", "hub", "2026-09-01T12:00:00.000Z")],
+        )
+        self.assertEqual(am.main(["merge"]), 0)
+        mem = os.path.join(self.home, "memory.jsonl")
+        with open(mem, "r", encoding="utf-8") as fh:
+            hosts = [json.loads(line)["host"] for line in fh]
+        self.assertEqual(hosts, ["agent-box"])
+        late = os.path.join(self.home, "in", "mbp.jsonl")
+        dump(late, [rec("mbp", "omp/s/mbp", "from mbp", "2026-09-01T12:00:01.000Z")])
+        os.utime(late, (1, 1))
+        self.assertLess(os.path.getmtime(late), os.path.getmtime(mem))
+        self.assertEqual(am.main(["merge"]), 0)
+        with open(mem, "r", encoding="utf-8") as fh:
+            hosts = sorted(json.loads(line)["host"] for line in fh)
+        self.assertEqual(hosts, ["agent-box", "mbp"])
+        self.assertEqual(am.main(["merge"]), 0)
+
+
     def test_sqlite_hermes_and_opencode(self):
         hermes = os.path.join(self.user, ".hermes/state.db")
         os.makedirs(os.path.dirname(hermes), exist_ok=True)
