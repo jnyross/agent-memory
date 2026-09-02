@@ -57,7 +57,9 @@ if on "$name" "ssh -o BatchMode=yes -o ConnectTimeout=10 $hub true" >/dev/null 2
   pass "$name reaches hub"
 else
   on "$name" 'mkdir -p ~/.ssh; chmod 700 ~/.ssh; [ -f ~/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519'
+  tip=$(resolve_peer_ip "$hub" 2>/dev/null || true)
   ghost=$(ssh -G "$hub" 2>/dev/null | awk '/^hostname /{print $2; exit}')
+  [ -n "$tip" ] && ghost=$tip
   guser=$(ssh -G "$hub" 2>/dev/null | awk '/^user /{print $2; exit}')
   dhost=$(on "$name" "ssh -G $hub 2>/dev/null | awk '/^hostname /{print \$2; exit}'")
   if [ "$dhost" = "$hub" ]; then

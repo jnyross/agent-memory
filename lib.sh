@@ -48,3 +48,28 @@ on() {
 }
 md5_of() { on "$1" "md5sum $2 2>/dev/null | cut -c1-32 || md5 -q $2"; }
 is_mac() { on "$1" uname | grep -q Darwin; }
+
+find_tailscale() {
+  if command -v tailscale >/dev/null 2>&1; then
+    printf 'tailscale\n'
+  elif [ -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ]; then
+    printf '/Applications/Tailscale.app/Contents/MacOS/Tailscale\n'
+  elif [ -x /usr/local/bin/tailscale ]; then
+    printf '/usr/local/bin/tailscale\n'
+  else
+    return 1
+  fi
+}
+
+resolve_peer_ip() {
+  _peer=$1
+  _ts=$(find_tailscale 2>/dev/null || true)
+  if [ -n "$_ts" ]; then
+    _tip=$("$_ts" ip -4 "$_peer" 2>/dev/null || true)
+    if [ -n "$_tip" ]; then
+      printf '%s\n' "$_tip"
+      return 0
+    fi
+  fi
+  return 1
+}

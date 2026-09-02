@@ -113,9 +113,10 @@ Install agent-memory on this machine from https://github.com/jnyross/agent-memor
 
 5. Ensure you have an SSH key:
    [ -f ~/.ssh/id_ed25519.pub ] || ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519
-
 6. Add the hub to ~/.ssh/config:
    mkdir -p ~/.ssh && chmod 700 ~/.ssh
+
+   If this machine has Tailscale installed and joined to the tailnet:
    cat << 'EOF' >> ~/.ssh/config
 
 Host agent-box
@@ -126,6 +127,7 @@ Host agent-box
   StrictHostKeyChecking accept-new
 EOF
 
+   If this machine does not have Tailscale, replace 100.89.131.80 with the hub's regular LAN IP or public hostname/IP provided by the operator.
 7. Verify the local daemon:
    ~/.local/bin/agent-memory status
    Confirm "host" matches <device-name> and "errors" is [].
