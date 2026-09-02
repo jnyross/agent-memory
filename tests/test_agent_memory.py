@@ -398,7 +398,158 @@ class MemoryTest(unittest.TestCase):
             texts = [json.loads(line)["text"] for line in fh]
         self.assertEqual(texts, ["first", "second"])
 
+    def test_merge_append_only_and_index_matches_jsonl(self):
+        os.environ["AGENT_MEMORY_HOST"] = "agent-box"
+        os.environ["AGENT_MEMORY_ROLE"] = "hub"
+        os.makedirs(os.path.join(self.home, "out"), exist_ok=True)
+        os.makedirs(os.path.join(self.home, "in"), exist_ok=True)
 
+        def rec(key, text):
+            return {
+                "host": "mini",
+                "key": key,
+                "path": "x",
+                "role": "user",
+                "runtime": "omp",
+                "session_id": "s",
+                "text": text,
+                "ts": "2026-09-01T12:00:00.000Z",
+            }
+
+        path = os.path.join(self.home, "in", "mini.jsonl")
+        dump(path, [rec("omp/s/1", "first")])
+        self.assertEqual(am.main(["merge"]), 0)
+        mem = os.path.join(self.home, "memory.jsonl")
+        dump(path, [rec("omp/s/1", "first"), rec("omp/s/2", "second")])
+        self.assertEqual(am.main(["merge"]), 0)
+        with open(mem, "r", encoding="utf-8") as fh:
+            texts = [json.loads(line)["text"] for line in fh]
+        self.assertEqual(texts, ["first", "second"])
+        mtime = os.path.getmtime(mem)
+        self.assertEqual(am.main(["merge"]), 0)
+        self.assertEqual(os.path.getmtime(mem), mtime)
+        con = sqlite3.connect(os.path.join(self.home, "memory.sqlite"))
+        try:
+            n_keys = con.execute("SELECT count(*) FROM keys").fetchone()[0]
+        finally:
+            con.close()
+        self.assertEqual(n_keys, len(texts))
+
+    def test_merge_replaced_inode_same_prefix_is_incremental(self):
+        os.environ["AGENT_MEMORY_HOST"] = "agent-box"
+        os.environ["AGENT_MEMORY_ROLE"] = "hub"
+        os.makedirs(os.path.join(self.home, "out"), exist_ok=True)
+        os.makedirs(os.path.join(self.home, "in"), exist_ok=True)
+
+        def rec(key, text):
+            return {
+                "host": "mini",
+                "key": key,
+                "path": "x",
+                "role": "user",
+                "runtime": "omp",
+                "session_id": "s",
+                "text": text,
+                "ts": "2026-09-01T12:00:00.000Z",
+            }
+
+        path = os.path.join(self.home, "in", "mini.jsonl")
+        dump(path, [rec("omp/s/1", "first")])
+        self.assertEqual(am.main(["merge"]), 0)
+        old_ino = am.load_state(self.home)["merge:" + path]["ino"]
+        old_cursor = am.load_state(self.home)["merge:" + path]
+        tmp = path + ".tmp"
+        with open(path, "r", encoding="utf-8") as fh:
+            body = fh.read()
+        extra = json.dumps(rec("omp/s/2", "second"), ensure_ascii=False) + "\n"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(body + extra)
+        os.replace(tmp, path)
+        self.assertEqual(am.main(["merge"]), 0)
+        mem = os.path.join(self.home, "memory.jsonl")
+        with open(mem, "r", encoding="utf-8") as fh:
+            texts = [json.loads(line)["text"] for line in fh]
+        self.assertEqual(texts, ["first", "second"])
+        cursor = am.load_state(self.home)["merge:" + path]
+        self.assertNotEqual(cursor["ino"], old_ino)
+        self.assertEqual(cursor["lines"], old_cursor["lines"] + 1)
+        self.assertEqual(
+            cursor["offset"], old_cursor["offset"] + len(extra.encode("utf-8"))
+        )
+
+    def test_merge_replaced_inode_different_prefix_resets_and_dedupes(self):
+        os.environ["AGENT_MEMORY_HOST"] = "agent-box"
+        os.environ["AGENT_MEMORY_ROLE"] = "hub"
+        os.makedirs(os.path.join(self.home, "out"), exist_ok=True)
+        os.makedirs(os.path.join(self.home, "in"), exist_ok=True)
+
+        def rec(key, text):
+            return {
+                "host": "mini",
+                "key": key,
+                "path": "x",
+                "role": "user",
+                "runtime": "omp",
+                "session_id": "s",
+                "text": text,
+                "ts": "2026-09-01T12:00:00.000Z",
+            }
+
+        path = os.path.join(self.home, "in", "mini.jsonl")
+        dump(path, [rec("omp/s/1", "first")])
+        self.assertEqual(am.main(["merge"]), 0)
+        tmp = path + ".tmp"
+        dump(tmp, [rec("omp/s/1", "rewritten"), rec("omp/s/2", "second")])
+        os.replace(tmp, path)
+        self.assertEqual(am.main(["merge"]), 0)
+        mem = os.path.join(self.home, "memory.jsonl")
+        with open(mem, "r", encoding="utf-8") as fh:
+            keys = [json.loads(line)["key"] for line in fh]
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertIn("omp/s/2", keys)
+
+    def test_capture_replaced_inode_same_prefix_keeps_offset(self):
+        path = os.path.join(
+            self.user,
+            ".omp/agent/sessions/proj/2026-09-02T00-00-00-000Z_repl.jsonl",
+        )
+        rec = {
+            "type": "message",
+            "id": "abcd1234",
+            "timestamp": "2026-09-02T00:00:00.000Z",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "before"}],
+            },
+        }
+        dump(path, [rec])
+        self.capture()
+        self.assertEqual(len(load_out(self.home, "johns-macbook-air")), 1)
+        tmp = path + ".tmp"
+        with open(path, "r", encoding="utf-8") as fh:
+            body = fh.read()
+        extra = (
+            json.dumps(
+                {
+                    "type": "message",
+                    "id": "abcd1235",
+                    "timestamp": "2026-09-02T00:00:01.000Z",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "after"}],
+                    },
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(body + extra)
+        os.replace(tmp, path)
+        self.capture()
+        rows = load_out(self.home, "johns-macbook-air")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[1]["text"], "after")
 
     def test_sqlite_hermes_and_opencode(self):
         hermes = os.path.join(self.user, ".hermes/state.db")

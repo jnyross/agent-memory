@@ -22,7 +22,8 @@ On disk, under `~/.local/share/agent-memory` (or `$AGENT_MEMORY_HOME`):
 
 - `out/<host>.jsonl` — this machine's capture
 - `in/<host>.jsonl` — hub copies of the others
-- `memory.jsonl` — merged file, written on the hub, rsync'd back
+- `memory.jsonl` — merged, append-only, arrival order; written on the hub, rsync'd back
+- `merge.sqlite` — hub working index (keys + FTS5)
 - `memory.sqlite` — disposable FTS5 index
 - `state.json` — tail cursors and sqlite high-water marks
 
@@ -58,7 +59,9 @@ AGENT_MEMORY_HOST=mbp sh install.sh
 AGENT_MEMORY_HOST=johns-macbook-air sh install.sh
 ```
 
-Linux gets a user systemd timer every 60s. macOS gets `io.johnross.agent-memory`. The old `john-agent-archive` timer/launch agent is disabled. Raw files under `~/.local/share/john-agent-archive` are left alone.
+Or roll out the whole fleet from a clean checkout with `sh deploy.sh` (it refuses to run unless the working tree is clean and `HEAD` is `origin/main`).
+
+Linux gets a user systemd timer every 60s. macOS gets `io.johnross.agent-memory`. `install.sh` removes the old `john-agent-archive` units, plist, code and CLI; raw data under `~/.local/share/john-agent-archive` is left in place.
 
 Rollout order is hub first, then `mini`, `mbp`, local.
 

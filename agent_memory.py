@@ -5,9 +5,12 @@ import argparse
 import datetime
 import fcntl
 import glob
+import hashlib
+import io
 import json
 import os
 import re
+import shutil
 import socket
 import sqlite3
 import subprocess
@@ -56,6 +59,7 @@ HUB_HOST = "agent-box"
 REMOTE_HOME = "~/.local/share/agent-memory"
 OPENCODE_GRACE_MS = 120000
 HOSTS = ["johns-macbook-air", "mbp", "mini", "agent-box"]
+GUARD_BYTES = 64
 
 
 def mem_home():
@@ -353,57 +357,63 @@ EXTRACTORS = {
 }
 
 
-def tail_file(path, cursor, extract, host, runtime, out_fh, status):
+def guard_at(fh, offset):
+    start = max(0, offset - GUARD_BYTES)
+    fh.seek(start)
+    return hashlib.sha256(fh.read(offset - start)).hexdigest()
+
+
+def tail_file(path, cursor, extract, out_fh, status):
     st = os.stat(path)
-    if cursor is None or st.st_ino != cursor.get("ino") or st.st_size < cursor.get("size", 0):
-        offset = 0
-        lines = 0
-    elif st.st_size == cursor.get("size"):
-        return {
-            "ino": st.st_ino,
-            "size": st.st_size,
-            "offset": cursor.get("offset", 0),
-            "lines": cursor.get("lines", 0),
-        }, 0
-    else:
-        offset = cursor.get("offset", 0)
-        lines = cursor.get("lines", 0)
+    if (
+        cursor is not None
+        and st.st_ino == cursor.get("ino")
+        and st.st_size == cursor.get("size")
+    ):
+        return cursor, 0
+    reset = cursor is None or st.st_size < cursor.get("size", 0)
     with open(path, "rb") as fh:
+        if not reset and st.st_ino != cursor.get("ino"):
+            reset = guard_at(fh, cursor["offset"]) != cursor.get("guard")
+        offset, lines = (0, 0) if reset else (cursor["offset"], cursor["lines"])
         fh.seek(offset)
         data = fh.read()
-    end = data.rfind(b"\n")
-    if end < 0:
+        end = data.rfind(b"\n")
+        if end < 0:
+            return {
+                "ino": st.st_ino,
+                "size": st.st_size,
+                "offset": offset,
+                "lines": lines,
+                "guard": guard_at(fh, offset),
+            }, 0
+        emitted = 0
+        chunk = data[: end + 1]
+        parts = chunk.split(b"\n")
+        if parts and parts[-1] == b"":
+            parts.pop()
+        for raw in parts:
+            lines += 1
+            try:
+                obj = json.loads(raw.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                status["malformed"] += 1
+                continue
+            if not isinstance(obj, dict):
+                continue
+            rec = extract(obj, path, lines, st.st_mtime)
+            if rec is None:
+                continue
+            out_fh.write(json.dumps(rec, ensure_ascii=False, sort_keys=True) + "\n")
+            emitted += 1
+        new_offset = offset + end + 1
         return {
             "ino": st.st_ino,
             "size": st.st_size,
-            "offset": offset,
+            "offset": new_offset,
             "lines": lines,
-        }, 0
-    emitted = 0
-    chunk = data[: end + 1]
-    parts = chunk.split(b"\n")
-    if parts and parts[-1] == b"":
-        parts.pop()
-    for raw in parts:
-        lines += 1
-        try:
-            obj = json.loads(raw.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            status["malformed"] += 1
-            continue
-        if not isinstance(obj, dict):
-            continue
-        rec = extract(obj, path, lines, st.st_mtime)
-        if rec is None:
-            continue
-        out_fh.write(json.dumps(rec, ensure_ascii=False, sort_keys=True) + "\n")
-        emitted += 1
-    return {
-        "ino": st.st_ino,
-        "size": st.st_size,
-        "offset": offset + end + 1,
-        "lines": lines,
-    }, emitted
+            "guard": guard_at(fh, new_offset),
+        }, emitted
 
 
 def capture_jsonl(home, host, state, out_fh, status):
@@ -413,9 +423,7 @@ def capture_jsonl(home, host, state, out_fh, status):
             status["files_tracked"] += 1
             cursor = state.get(path)
             try:
-                new_cursor, n = tail_file(
-                    path, cursor, extract, host, runtime, out_fh, status
-                )
+                new_cursor, n = tail_file(path, cursor, extract, out_fh, status)
             except OSError as exc:
                 status["errors"].append("%s: %s" % (path, exc))
                 continue
@@ -605,72 +613,92 @@ def source_paths(home):
     return paths
 
 
-def input_sizes(home):
-    sizes = {}
-    for path in source_paths(home):
+def _merge(home):
+    merge_db = os.path.join(home, "merge.sqlite")
+    mem_path = os.path.join(home, "memory.jsonl")
+    memory_sqlite = os.path.join(home, "memory.sqlite")
+    state = load_state(home)
+    if not os.path.exists(merge_db):
+        if os.path.exists(mem_path):
+            os.unlink(mem_path)
+        for key in [k for k in state if isinstance(k, str) and k.startswith("merge:")]:
+            del state[key]
+        init = sqlite3.connect(merge_db)
         try:
-            sizes[path] = os.path.getsize(path)
-        except OSError:
-            continue
-    return sizes
-
-
-def read_jsonl_records(path, seen, rows, errors):
+            init.execute(
+                "CREATE TABLE keys (key TEXT PRIMARY KEY) WITHOUT ROWID"
+            )
+            init.execute(
+                "CREATE VIRTUAL TABLE mem USING fts5("
+                "key UNINDEXED, host UNINDEXED, runtime UNINDEXED, "
+                "session_id UNINDEXED, ts UNINDEXED, role UNINDEXED, text)"
+            )
+            init.commit()
+        finally:
+            init.close()
+    con = sqlite3.connect(merge_db)
+    data = b""
+    status = {"malformed": 0, "errors": []}
+    cursors = {}
     try:
-        fh = open(path, "r", encoding="utf-8")
-    except OSError as exc:
-        errors.append("%s: %s" % (path, exc))
-        return
-    with fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(rec, dict):
-                continue
-            key = rec.get("key")
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            rows.append(rec)
+        con.execute("BEGIN")
+        buf = io.StringIO()
 
-
-def rebuild_fts(home, rows):
-    dest = os.path.join(home, "memory.sqlite")
-    tmp = dest + ".tmp"
-    if os.path.exists(tmp):
-        os.unlink(tmp)
-    con = sqlite3.connect(tmp)
-    try:
-        con.execute(
-            "CREATE VIRTUAL TABLE mem USING fts5("
-            "key UNINDEXED, host UNINDEXED, runtime UNINDEXED, "
-            "session_id UNINDEXED, ts UNINDEXED, role UNINDEXED, text)"
-        )
-        con.executemany(
-            "INSERT INTO mem (key, host, runtime, session_id, ts, role, text) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [
+        def merge_extract(obj, _path, _lines, _mtime):
+            key = obj.get("key")
+            if not isinstance(key, str) or not key:
+                return None
+            if con.execute(
+                "INSERT OR IGNORE INTO keys(key) VALUES (?)", (key,)
+            ).rowcount != 1:
+                return None
+            con.execute(
+                "INSERT INTO mem (key, host, runtime, session_id, ts, role, text) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
-                    rec.get("key") or "",
-                    rec.get("host") or "",
-                    rec.get("runtime") or "",
-                    rec.get("session_id") or "",
-                    rec.get("ts") or "",
-                    rec.get("role") or "",
-                    rec.get("text") or "",
+                    key,
+                    obj.get("host") or "",
+                    obj.get("runtime") or "",
+                    obj.get("session_id") or "",
+                    obj.get("ts") or "",
+                    obj.get("role") or "",
+                    obj.get("text") or "",
+                ),
+            )
+            return obj
+
+        for path in sorted(source_paths(home)):
+            try:
+                cursors[path], _ = tail_file(
+                    path, state.get("merge:" + path), merge_extract, buf, status
                 )
-                for rec in rows
-            ],
-        )
+            except OSError as exc:
+                status["errors"].append("%s: %s" % (path, exc))
+                continue
+        data = buf.getvalue().encode("utf-8")
+        if data:
+            fd = os.open(mem_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+            try:
+                view = memoryview(data)
+                while len(view):
+                    view = view[os.write(fd, view) :]
+                os.fsync(fd)
+            finally:
+                os.close(fd)
         con.commit()
     finally:
         con.close()
-    os.replace(tmp, dest)
+    if data:
+        shutil.copyfile(merge_db, memory_sqlite + ".tmp")
+        os.replace(memory_sqlite + ".tmp", memory_sqlite)
+    state.update({"merge:" + p: c for p, c in cursors.items()})
+    meta = state.get("_meta") or {}
+    if status["errors"]:
+        meta["errors"] = list(meta.get("errors") or []) + status["errors"]
+    meta.pop("merge_inputs", None)
+    state["_meta"] = meta
+    save_state(home, state)
+    return 0
 
 
 def cmd_merge(_args):
@@ -683,37 +711,6 @@ def cmd_merge(_args):
         return _merge(home)
     finally:
         os.close(lock)
-
-
-def _merge(home):
-    mem_path = os.path.join(home, "memory.jsonl")
-    sizes = input_sizes(home)
-    if os.path.exists(mem_path):
-        prev = (load_state(home).get("_meta") or {}).get("merge_inputs")
-        if isinstance(prev, dict) and sizes == prev:
-            return 0
-    seen = set()
-    rows = []
-    errors = []
-    for path in sorted(sizes):
-        read_jsonl_records(path, seen, rows, errors)
-    rows.sort(key=lambda rec: (rec.get("ts") or "", rec.get("key") or ""))
-    tmp = mem_path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        for rec in rows:
-            fh.write(json.dumps(rec, ensure_ascii=False, sort_keys=True) + "\n")
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, mem_path)
-    rebuild_fts(home, rows)
-    state = load_state(home)
-    meta = state.get("_meta") or {}
-    if errors:
-        meta["errors"] = list(meta.get("errors") or []) + errors
-    meta["merge_inputs"] = sizes
-    state["_meta"] = meta
-    save_state(home, state)
-    return 0
 
 
 def cmd_pull(_args):
@@ -897,7 +894,6 @@ def build_parser():
     search = sub.add_parser("search")
     search.add_argument("phrase")
     search.add_argument("--limit", type=int, default=20)
-    search.add_argument("--json", action="store_true")
     search.set_defaults(func=cmd_search)
     sub.add_parser("status").set_defaults(func=cmd_status)
     sub.add_parser("cycle").set_defaults(func=cmd_cycle)

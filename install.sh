@@ -11,12 +11,17 @@ BIN="${HOME}/.local/bin"
 mkdir -p "$LIB" "$SHARE/out" "$SHARE/in" "$SHARE/logs" "$BIN"
 cp "$HERE/agent_memory.py" "$LIB/agent_memory.py"
 
-printf '%s\n' '#!/bin/sh' "exec /usr/bin/python3 ${LIB}/agent_memory.py \"\$@\"" > "$BIN/agent-memory"
+{
+  printf '%s\n' '#!/bin/sh'
+  printf '%s\n' ": \"\${AGENT_MEMORY_HOST:=${HOST}}\""
+  printf '%s\n' 'export AGENT_MEMORY_HOST'
+  if [ -n "$ROLE" ]; then
+    printf '%s\n' ": \"\${AGENT_MEMORY_ROLE:=${ROLE}}\""
+    printf '%s\n' 'export AGENT_MEMORY_ROLE'
+  fi
+  printf '%s\n' "exec /usr/bin/python3 ${LIB}/agent_memory.py \"\$@\""
+} > "$BIN/agent-memory"
 chmod +x "$BIN/agent-memory" "$LIB/agent_memory.py"
-
-if [ "$ROLE" = "hub" ]; then
-  printf '%s\n' '["johns-macbook-air","mbp","mini","agent-box"]' > "$SHARE/hosts.json"
-fi
 
 UNAME=$(uname)
 if [ "$UNAME" = "Linux" ]; then
@@ -28,10 +33,6 @@ if [ "$UNAME" = "Linux" ]; then
     printf '%s\n' ''
     printf '%s\n' '[Service]'
     printf '%s\n' 'Type=oneshot'
-    printf '%s\n' "Environment=AGENT_MEMORY_HOST=${HOST}"
-    if [ -n "$ROLE" ]; then
-      printf '%s\n' "Environment=AGENT_MEMORY_ROLE=${ROLE}"
-    fi
     printf '%s\n' 'ExecStart=%h/.local/bin/agent-memory cycle'
     printf '%s\n' 'Nice=10'
     printf '%s\n' 'IOSchedulingClass=idle'
@@ -56,7 +57,6 @@ if [ "$UNAME" = "Linux" ]; then
 
   systemctl --user daemon-reload
   systemctl --user enable --now agent-memory.timer
-  systemctl --user disable --now john-agent-archive-cycle.timer >/dev/null 2>&1 || true
 
 elif [ "$UNAME" = "Darwin" ]; then
   mkdir -p "${HOME}/Library/LaunchAgents"
@@ -66,17 +66,6 @@ elif [ "$UNAME" = "Darwin" ]; then
     printf '%s\n' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
     printf '%s\n' '<plist version="1.0">'
     printf '%s\n' '<dict>'
-    printf '%s\n' '	<key>EnvironmentVariables</key>'
-    printf '%s\n' '	<dict>'
-    printf '%s\n' '		<key>AGENT_MEMORY_HOST</key>'
-    printf '%s\n' "		<string>${HOST}</string>"
-    if [ -n "$ROLE" ]; then
-      printf '%s\n' '		<key>AGENT_MEMORY_ROLE</key>'
-      printf '%s\n' "		<string>${ROLE}</string>"
-    fi
-    printf '%s\n' '		<key>PYTHONDONTWRITEBYTECODE</key>'
-    printf '%s\n' '		<string>1</string>'
-    printf '%s\n' '	</dict>'
     printf '%s\n' '	<key>Label</key>'
     printf '%s\n' '	<string>io.johnross.agent-memory</string>'
     printf '%s\n' '	<key>LowPriorityIO</key>'
@@ -103,8 +92,22 @@ elif [ "$UNAME" = "Darwin" ]; then
   UID_NUM=$(id -u)
   launchctl bootout "gui/${UID_NUM}" "$PLIST" >/dev/null 2>&1 || true
   launchctl bootstrap "gui/${UID_NUM}" "$PLIST"
-  launchctl bootout "gui/${UID_NUM}" "${HOME}/Library/LaunchAgents/io.johnross.agent-archive.cycle.plist" >/dev/null 2>&1 || true
 else
   printf '%s\n' "unsupported uname: ${UNAME}" >&2
   exit 1
+fi
+
+if [ "$UNAME" = "Linux" ]; then
+  systemctl --user disable --now john-agent-archive-cycle.timer john-agent-archive-cycle.service >/dev/null 2>&1 || true
+  rm -f "${HOME}/.config/systemd/user/john-agent-archive-cycle.service" "${HOME}/.config/systemd/user/john-agent-archive-cycle.timer"
+  systemctl --user daemon-reload
+elif [ "$UNAME" = "Darwin" ]; then
+  launchctl bootout "gui/${UID_NUM}/io.johnross.agent-archive.cycle" >/dev/null 2>&1 || true
+  rm -f "${HOME}/Library/LaunchAgents/io.johnross.agent-archive.cycle.plist"
+fi
+rm -rf "${HOME}/.local/lib/john-agent-archive" "${HOME}/.config/john-agent-archive"
+rm -f "${HOME}/.local/bin/john-archive"
+rm -f "${SHARE}/hosts.json"
+if [ "$ROLE" = "hub" ]; then
+  rm -f "${SHARE}/in/agent-box.jsonl"
 fi
