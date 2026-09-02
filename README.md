@@ -70,3 +70,21 @@ Rollout order is hub first, then `mini`, `mbp`, local.
 ```console
 python3 -m unittest discover -s tests -v
 ```
+
+## Verify
+
+After you change `agent_memory.py` or `install.sh`, run:
+
+```console
+sh verify.sh --local
+```
+
+After `sh deploy.sh`, run the fleet check (needs ssh to `agent-box`, `mini`, and `mbp`):
+
+```console
+sh verify.sh
+```
+
+Each line is `PASS` or `FAIL`. The script exits 1 if any check fails. Fix the source and redeploy. Do not edit `verify.sh` or the tests to make a check pass.
+
+The first hub cycle after `merge.sqlite` is deleted takes about 40 seconds and fails the timing check once. Wait for the next cycle, then run `sh verify.sh` again.
