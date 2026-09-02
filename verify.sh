@@ -15,6 +15,7 @@ MAX_CYCLE_SECS=10
 fails=0
 pass() { printf 'PASS %s\n' "$1"; }
 fail() { printf 'FAIL %s: %s\n' "$1" "$2"; fails=$((fails + 1)); }
+digits() { tr -cd '0-9'; }
 
 name_of() { [ "$1" = local ] && echo "$LOCAL_NAME" || echo "$1"; }
 on() {
@@ -34,11 +35,11 @@ check_sim() {
   if ! AGENT_MEMORY_HOME="$home" AGENT_MEMORY_HOST=$HUB AGENT_MEMORY_ROLE=hub python3 agent_memory.py cycle; then
     fail "hub sim" "first cycle failed"; rm -rf "$home"; return
   fi
-  lines=$(wc -l < "$home/memory.jsonl")
+  lines=$(wc -l < "$home/memory.jsonl" | digits)
   keys=$(python3 -c "import sqlite3,sys;print(sqlite3.connect(sys.argv[1]).execute('select count(*) from keys').fetchone()[0])" "$home/memory.sqlite")
-  dupes=$(jq -r .key "$home/memory.jsonl" | sort | uniq -d | wc -l)
+  dupes=$(jq -r .key "$home/memory.jsonl" | sort | uniq -d | wc -l | digits)
   AGENT_MEMORY_HOME="$home" AGENT_MEMORY_HOST=$HUB AGENT_MEMORY_ROLE=hub python3 agent_memory.py cycle
-  after=$(wc -l < "$home/memory.jsonl")
+  after=$(wc -l < "$home/memory.jsonl" | digits)
   rm -rf "$home"
   [ "$lines" = "$keys" ] && pass "hub sim keys == lines ($lines)" || fail "hub sim keys == lines" "lines=$lines keys=$keys"
   [ "$dupes" = 0 ] && pass "hub sim no duplicate keys" || fail "hub sim duplicate keys" "$dupes"
@@ -85,11 +86,11 @@ check_hub_state() {
   [ "$errs" = 0 ] && pass "hub status.errors empty" || fail "hub status.errors" "$(printf '%s' "$st" | jq -c .errors)"
   keys=$(on $HUB "python3 -c \"import os,sqlite3;print(sqlite3.connect(os.path.expanduser('~/.local/share/agent-memory/memory.sqlite')).execute('select count(*) from keys').fetchone()[0])\"")
   [ "$keys" = "$lines" ] && pass "hub memory.sqlite keys == memory_lines ($lines)" || fail "hub keys == lines" "keys=$keys lines=$lines"
-  hosts=$(on $HUB "jq -r .host $SHARE/memory.jsonl | sort -u | wc -l")
+  hosts=$(on $HUB "jq -r .host $SHARE/memory.jsonl | sort -u | wc -l" | digits)
   [ "$hosts" = 4 ] && pass "hub memory.jsonl has 4 hosts" || fail "hub memory.jsonl hosts" "$hosts"
-  dupes=$(on $HUB "jq -r .key $SHARE/memory.jsonl | sort | uniq -d | wc -l")
+  dupes=$(on $HUB "jq -r .key $SHARE/memory.jsonl | sort | uniq -d | wc -l" | digits)
   [ "$dupes" = 0 ] && pass "hub memory.jsonl no duplicate keys" || fail "hub duplicate keys" "$dupes"
-  stale=$(on $HUB "ls $SHARE/hosts.json $SHARE/in/$HUB.jsonl 2>/dev/null | wc -l")
+  stale=$(on $HUB "ls $SHARE/hosts.json $SHARE/in/$HUB.jsonl 2>/dev/null | wc -l" | digits)
   [ "$stale" = 0 ] && pass "hub has no hosts.json or in/$HUB.jsonl" || fail "hub stale files" "$stale present"
   for f in merge.sqlite memory.sqlite memory.jsonl; do
     on $HUB "test -s $SHARE/$f" && pass "hub $f present" || fail "hub $f" "missing or empty"
@@ -101,7 +102,7 @@ check_hub_timing() {
   gaps=$(printf '%s\n' "$raw" | awk '/Starting/{s=$1} /Finished/&&s{printf "%.1f\n", $1-s; s=0}')
   [ -n "$gaps" ] || { fail "hub cycle timing" "no Starting/Finished pairs in last 10min"; return; }
   worst=$(printf '%s\n' "$gaps" | sort -n | tail -1)
-  n=$(printf '%s\n' "$gaps" | wc -l | tr -d ' ')
+  n=$(printf '%s\n' "$gaps" | wc -l | digits)
   if [ "$(awk -v w="$worst" -v m="$MAX_CYCLE_SECS" 'BEGIN{print (w < m)}')" = 1 ]; then
     pass "hub cycles < ${MAX_CYCLE_SECS}s ($n cycles, worst ${worst}s)"
   else
@@ -118,7 +119,7 @@ check_old_install_gone() {
       c=$(on "$h" 'systemctl --user list-unit-files 2>/dev/null | grep -c john-agent-archive')
       [ "$c" = 0 ] && pass "$h no john-agent-archive units" || fail "$h john-agent-archive units" "$c present"
     fi
-    c=$(on "$h" 'ls -d $HOME/.local/lib/john-agent-archive $HOME/.local/bin/john-archive $HOME/.config/john-agent-archive 2>/dev/null | wc -l')
+    c=$(on "$h" 'ls -d $HOME/.local/lib/john-agent-archive $HOME/.local/bin/john-archive $HOME/.config/john-agent-archive 2>/dev/null | wc -l' | digits)
     [ "$c" = 0 ] && pass "$h old archive code removed" || fail "$h old archive code" "$c paths remain"
     on "$h" 'test -d $HOME/.local/share/john-agent-archive' && pass "$h old archive data kept" || fail "$h old archive data" "missing"
   done
