@@ -50,20 +50,17 @@ jq -c 'select(.text|test("prescription";"i"))' ~/.local/share/agent-memory/memor
 
 ## Install
 
-On each host, from a checkout (or `/tmp` after `scp`):
+To deploy updates across the existing fleet from a clean checkout:
 
 ```console
-AGENT_MEMORY_HOST=agent-box AGENT_MEMORY_ROLE=hub sh install.sh
-AGENT_MEMORY_HOST=mini sh install.sh
-AGENT_MEMORY_HOST=mbp sh install.sh
-AGENT_MEMORY_HOST=johns-macbook-air sh install.sh
+sh deploy.sh
 ```
 
-Or roll out the whole fleet from a clean checkout with `sh deploy.sh`. It refuses to run unless the working tree is clean and `HEAD` is `origin/main`. Host names come from `fleet`.
+`deploy.sh` refuses to run unless the working tree is clean and `HEAD` is `origin/main`. Host names come from `fleet`.
 
-Linux gets a user systemd timer every 60s. macOS gets `io.johnross.agent-memory`. `install.sh` removes the old `john-agent-archive` units, plist, code and CLI. Raw data under `~/.local/share/john-agent-archive` is left in place.
+Linux gets a user systemd timer every 60s. macOS gets `io.johnross.agent-memory`. `install.sh` removes old archive units, plists, code, and CLI. Raw data under `~/.local/share/john-agent-archive` is left in place.
 
-Rollout order is the hub first, then the other remotes, then this machine.
+Rollout order is the hub first, then the remotes, then this machine.
 
 ## Tests
 
@@ -89,15 +86,66 @@ Each line is `PASS` or `FAIL`. The script exits 1 if any check fails. Fix the so
 
 The first hub cycle after `merge.sqlite` is deleted takes about 40 seconds and fails the timing check once. Wait for the next cycle, then run `sh verify.sh` again.
 
-## Onboard a device
+## Install on a new device
 
-To add a machine, a Grok bot for example:
+To add a new device to the fleet, choose one of two paths.
 
-1. Add a row to `fleet`. The first column is the ssh alias and `AGENT_MEMORY_HOST`. The second is `hub` or `leaf`.
+### Path A. Self-install by an agent on the device
+
+Copy and paste this instruction directly to the agent running on the target machine:
+
+```text
+Install agent-memory on this machine from https://github.com/jnyross/agent-memory:
+
+1. Check prerequisites:
+   - python3 >= 3.9: python3 -V
+   - rsync: command -v rsync
+   - Linux with a systemd user session or macOS
+
+2. Clone and enter the repository:
+   git clone https://github.com/jnyross/agent-memory.git
+   cd agent-memory
+
+3. Pick a device name for this machine (for example, grok-bot). Do not use an existing fleet name: agent-box, mini, mbp, johns-macbook-air.
+
+4. Install the service:
+   AGENT_MEMORY_HOST=<device-name> sh install.sh
+
+5. Ensure you have an SSH key:
+   [ -f ~/.ssh/id_ed25519.pub ] || ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519
+
+6. Add the hub to ~/.ssh/config:
+   mkdir -p ~/.ssh && chmod 700 ~/.ssh
+   cat << 'EOF' >> ~/.ssh/config
+
+Host agent-box
+  HostName 100.89.131.80
+  User john
+  IdentityFile ~/.ssh/id_ed25519
+  IdentitiesOnly yes
+  StrictHostKeyChecking accept-new
+EOF
+
+7. Verify the local daemon:
+   ~/.local/bin/agent-memory status
+   Confirm "host" matches <device-name> and "errors" is [].
+
+8. Handoff: Print your public key (cat ~/.ssh/id_ed25519.pub) and chosen <device-name>.
+   Inform the operator to:
+   a. Append your public key to agent-box:~/.ssh/authorized_keys
+   b. Add "<device-name> leaf" to the fleet file, commit, and push
+   Once authorized, test the connection with: ssh -o BatchMode=yes agent-box true
+```
+
+### Path B. Push-install from an existing machine
+
+If an existing machine can already reach the new device over SSH:
+
+1. Add a row to `fleet`. The first column is the SSH alias and `AGENT_MEMORY_HOST`. The second is `hub` or `leaf`.
 2. Commit and push.
-3. Create an ssh alias for that name on the machine that runs `onboard.sh`.
-4. Run `sh onboard.sh <name>`.
+3. Add an SSH alias for that name in `~/.ssh/config` on the deploying machine.
+4. Run `sh onboard.sh <device-name>`.
 
-The script checks Python 3.9, rsync, and the OS. It sets up hub ssh if that is missing. It runs `deploy.sh` for that host. It waits until `memory.jsonl` matches the hub.
+The script checks Python 3.9, rsync, and the OS. It configures hub SSH access, runs `deploy.sh` for that host, and waits until `memory.jsonl` matches the hub.
 
-Then run `sh verify.sh`. That script reads `fleet`.
+Then run `sh verify.sh` to check the full fleet.
