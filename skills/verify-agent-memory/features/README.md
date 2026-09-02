@@ -39,7 +39,7 @@ Keep implementation details out of the map. Name only user paths, stable handles
 
 ## Features
 
-- [Capture](./capture.md) copies new chat lines into `out/<host>.jsonl`.
+- [Capture](./capture.md) copies new chat lines (OMP, Muse Code, …) into `out/<host>.jsonl`.
 - [Merge](./merge.md) appends unique hub records into `memory.jsonl` and `memory.sqlite`.
 - [Search](./search.md) returns matching snippets from the index, or from `memory.jsonl` if the index is missing.
 - [Status](./status.md) prints JSON counts for this host.

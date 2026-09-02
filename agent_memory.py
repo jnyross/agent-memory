@@ -52,6 +52,13 @@ JSONL_GLOBS = (
     ("pi", ("~/.pi/agent/sessions/*/*.jsonl",)),
     ("grok", ("~/.grok/sessions/*/*/chat_history.jsonl",)),
     ("cursor", ("~/.cursor/projects/*/agent-transcripts/*/*.jsonl",)),
+    (
+        "muse",
+        (
+            "~/.local/share/muse/sessions/*/*/*/*/session.jsonl",
+            "~/.local/share/muse/sessions/*/*/*/*/subagent/*/session.jsonl",
+        ),
+    ),
 )
 HERMES_GLOBS = ("~/.hermes/state.db", "~/.hermes/profiles/*/state.db")
 OPENCODE_GLOBS = ("~/.local/share/opencode/opencode.db",)
@@ -151,8 +158,8 @@ def to_ts(value, fallback_mtime=None):
         value = None
     if isinstance(value, (int, float)):
         x = float(value)
-        if x >= 1e11:
-            x /= 1000.0
+        if x >= 1e14: x /= 1e6
+        elif x >= 1e11: x /= 1000.0
         try:
             dt = datetime.datetime.fromtimestamp(x, UTC)
         except (OSError, OverflowError, ValueError):
@@ -205,7 +212,7 @@ def discover(patterns):
     return seen
 
 
-def parts_text(parts, pred):
+def parts_text(parts, pred, key="type"):
     if isinstance(parts, str):
         return parts
     if not isinstance(parts, list):
@@ -214,7 +221,7 @@ def parts_text(parts, pred):
     for part in parts:
         if not isinstance(part, dict):
             continue
-        if pred(part.get("type")) and isinstance(part.get("text"), str):
+        if pred(part.get(key)) and isinstance(part.get("text"), str):
             bits.append(part["text"])
     return "\n".join(bits)
 
@@ -345,6 +352,27 @@ def extract_cursor(obj, path, lines, mtime):
         path,
     )
 
+def extract_muse(obj, path, lines, mtime):
+    ptype = obj.get("payload_type")
+    payload = obj.get("payload") or {}
+    stream = obj.get("stream") or {}
+    sid = stream.get("id") or os.path.basename(os.path.dirname(path))
+    ts = to_ts(obj.get("recorded_at"), mtime)
+    if ptype == "runtime.user_intent.accepted":
+        text = "\n".join(
+            parts_text(m.get("content"), lambda t: t == "text", key="kind")
+            for m in payload.get("model_messages") or []
+            if isinstance(m, dict)
+        )
+        line_key = payload.get("intent_id") or "L%d" % lines
+        return record(host_id(), "muse", sid, line_key, ts, "user", text, path)
+    if ptype == "runtime.session":
+        event = payload.get("event") or {}
+        if event.get("kind") == "assistant_message_committed":
+            line_key = event.get("message_id") or "L%d" % lines
+            return record(host_id(), "muse", sid, line_key, ts, "assistant", event.get("text"), path)
+    return None
+
 
 EXTRACTORS = {
     "codex": extract_codex,
@@ -353,6 +381,7 @@ EXTRACTORS = {
     "pi": extract_omp_pi("pi"),
     "grok": extract_grok,
     "cursor": extract_cursor,
+    "muse": extract_muse,
 }
 
 

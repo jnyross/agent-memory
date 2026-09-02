@@ -70,6 +70,7 @@ class MemoryTest(unittest.TestCase):
         self.assertEqual(am.to_ts("2026-08-31T15:43:51.592852044Z"), "2026-08-31T15:43:51.592Z")
         self.assertEqual(am.to_ts(1750000000.0), "2025-06-15T15:06:40.000Z")
         self.assertEqual(am.to_ts(1750000000123), "2025-06-15T15:06:40.123Z")
+        self.assertEqual(am.to_ts(1788380179006471), "2026-09-02T20:16:19.006Z")
         self.assertRegex(am.to_ts(None, 1750000000.0), TS_RE)
 
     def test_capture_all_file_runtimes(self):
@@ -265,6 +266,119 @@ class MemoryTest(unittest.TestCase):
         n = len(rows)
         self.capture()
         self.assertEqual(len(load_out(self.home, "johns-macbook-air")), n)
+
+    def test_capture_muse(self):
+        sid = "muse-sid-1"
+        child = "muse-child-1"
+        dump(
+            os.path.join(
+                self.user,
+                ".local/share/muse/sessions/2026/09/02/%s/session.jsonl" % sid,
+            ),
+            [
+                {"record_type": "retained_marker"},
+                {
+                    "schema_version": 1,
+                    "id": "e0",
+                    "stream": {"kind": "main", "id": sid},
+                    "sequence": 0,
+                    "recorded_at": 1788380179006471,
+                    "record_type": "envelope",
+                    "payload_type": "runtime.session.metadata",
+                    "payload": {},
+                },
+                {
+                    "schema_version": 1,
+                    "id": "e1",
+                    "stream": {"kind": "main", "id": sid},
+                    "sequence": 1,
+                    "recorded_at": 1788380179006471,
+                    "record_type": "envelope",
+                    "payload_type": "runtime.user_intent.accepted",
+                    "payload": {
+                        "surface": "main",
+                        "intent_id": "i1",
+                        "model_messages": [
+                            {"content": [{"kind": "text", "text": "muse hello"}]}
+                        ],
+                    },
+                },
+                {
+                    "schema_version": 1,
+                    "id": "e2",
+                    "stream": {"kind": "main", "id": sid},
+                    "sequence": 2,
+                    "recorded_at": 1788380179006471,
+                    "record_type": "envelope",
+                    "payload_type": "runtime.session",
+                    "payload": {"kind": "run", "event": {"kind": "task_stream_linked"}},
+                },
+                {
+                    "schema_version": 1,
+                    "id": "e3",
+                    "stream": {"kind": "main", "id": sid},
+                    "sequence": 3,
+                    "recorded_at": 1788380179006471,
+                    "record_type": "envelope",
+                    "payload_type": "runtime.session",
+                    "payload": {
+                        "kind": "run",
+                        "event": {
+                            "kind": "assistant_message_committed",
+                            "text": "muse hi",
+                            "message_id": "m1",
+                        },
+                    },
+                },
+                {
+                    "schema_version": 1,
+                    "id": "e4",
+                    "stream": {"kind": "main", "id": sid},
+                    "sequence": 4,
+                    "recorded_at": 1788380179006471,
+                    "record_type": "envelope",
+                    "payload_type": "runtime.session",
+                    "payload": {"kind": "run"},
+                },
+            ],
+        )
+        dump(
+            os.path.join(
+                self.user,
+                ".local/share/muse/sessions/2026/09/02/%s/subagent/%s/session.jsonl" % (sid, child),
+            ),
+            [
+                {
+                    "schema_version": 1,
+                    "id": "c1",
+                    "stream": {"kind": "subagent", "id": child},
+                    "sequence": 0,
+                    "recorded_at": 1788380179006471,
+                    "record_type": "envelope",
+                    "payload_type": "runtime.session",
+                    "payload": {
+                        "kind": "run",
+                        "event": {
+                            "kind": "assistant_message_committed",
+                            "text": "child hi",
+                            "message_id": "c1",
+                        },
+                    },
+                },
+            ],
+        )
+        self.capture()
+        rows = [r for r in load_out(self.home, "johns-macbook-air") if r["runtime"] == "muse"]
+        self.assertEqual(sorted(r["text"] for r in rows), ["child hi", "muse hello", "muse hi"])
+        by_text = {r["text"]: r for r in rows}
+        self.assertEqual(by_text["muse hello"]["key"], "muse/%s/i1" % sid)
+        self.assertEqual(by_text["muse hi"]["key"], "muse/%s/m1" % sid)
+        self.assertEqual(by_text["child hi"]["key"], "muse/%s/c1" % child)
+        self.assertEqual(by_text["muse hello"]["role"], "user")
+        self.assertEqual(by_text["muse hi"]["role"], "assistant")
+        for row in rows:
+            self.assertRegex(row["ts"], TS_RE)
+
 
     def test_torn_tail_then_complete(self):
         path = os.path.join(

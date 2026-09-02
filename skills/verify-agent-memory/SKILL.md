@@ -1,6 +1,6 @@
 ---
 name: verify-agent-memory
-description: "Drive the agent-memory CLI the way a user does: isolated capture, hub merge, search, status, and cycle. Use after changing agent_memory.py, install.sh, or deploy.sh, or when asked if search, merge, or the fleet still work."
+description: "Drive the agent-memory CLI the way a user does: isolated capture, muse capture, hub merge, search, status, and cycle. Use after changing agent_memory.py, install.sh, or deploy.sh, or when asked if search, merge, or the fleet still work."
 ---
 
 # Verify agent-memory
