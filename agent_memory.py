@@ -58,7 +58,6 @@ OPENCODE_GLOBS = ("~/.local/share/opencode/opencode.db",)
 HUB_HOST = "agent-box"
 REMOTE_HOME = "~/.local/share/agent-memory"
 OPENCODE_GRACE_MS = 120000
-HOSTS = ["johns-macbook-air", "mbp", "mini", "agent-box"]
 GUARD_BYTES = 64
 
 
