@@ -18,6 +18,12 @@ Each line:
 
 Text is stored verbatim. Roles are `user` or `assistant` only.
 
+The private memory store uses owner-only directories (0700) and data files
+(0600), including capture files, indexes, logs and temporary outputs. Capture
+and synchronization preserve these permissions without changing conversation
+text. Before upgrading an existing installation, verify its configured readers
+run as the owner; do not apply this policy to an unverified shared store.
+
 On disk, under `~/.local/share/agent-memory` (or `$AGENT_MEMORY_HOME`):
 
 - `out/<host>.jsonl` — this machine's capture
@@ -57,6 +63,21 @@ sh deploy.sh
 ```
 
 `deploy.sh` refuses to run unless the working tree is clean and `HEAD` is `origin/main`. Host names come from `fleet`.
+
+For an existing, verified installation, use `sh deploy.sh --code-only HOST...`
+to update collector code without modifying wrappers, schedules or services.
+Set `AGENT_MEMORY_EXPECTED_SHA256` to the installed collector checksum approved
+during preflight. The installer refuses unexpected installed code and saves a
+private code-only rollback copy before atomic replacement. It neither copies
+conversation data nor reads credentials. Reapplying identical code is a no-op.
+`sh install.sh --code-only` provides the same operation locally, using the
+existing wrapper's identity rather than requiring a new host configuration.
+
+Record permission/ACL metadata separately before tightening existing data.
+Verify normal capture/sync cycles and downstream readers after deployment.
+If a regression occurs, restore the previous collector using its saved code
+and the current checksum, and restore the recorded permission policy without
+rewinding live data. Skip inaccessible hosts and unverified consumers.
 
 Linux gets a user systemd timer every 60s. macOS gets `io.johnross.agent-memory`. `install.sh` removes old archive units, plists, code, and CLI. Raw data under `~/.local/share/john-agent-archive` is left in place.
 

@@ -1,12 +1,67 @@
 #!/bin/sh
 set -eu
 
-HOST="${AGENT_MEMORY_HOST:?set AGENT_MEMORY_HOST to the fleet name}"
-ROLE="${AGENT_MEMORY_ROLE:-}"
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 LIB="${HOME}/.local/lib/agent-memory"
 SHARE="${HOME}/.local/share/agent-memory"
 BIN="${HOME}/.local/bin"
+
+if [ "${1:-}" = --code-only ]; then
+  [ "$#" -eq 1 ] || { echo 'usage: install.sh [--code-only]' >&2; exit 2; }
+  exec /usr/bin/python3 - "$HERE/agent_memory.py" "$LIB/agent_memory.py" "$BIN/agent-memory" "$SHARE" <<'PY'
+import hashlib, os, pathlib, re, stat, sys, tempfile
+source, target, wrapper, share = map(pathlib.Path, sys.argv[1:])
+def checked(path, directory=False):
+    info = path.lstat()
+    if info.st_uid != os.getuid() or not (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)):
+        raise ValueError('Existing installation has an unsafe type or owner.')
+    if not directory and info.st_nlink != 1:
+        raise ValueError('Existing installation must not contain hard links.')
+    return info
+def replace(path, data, mode):
+    fd, temporary = tempfile.mkstemp(prefix='.code-only-', dir=str(path.parent))
+    try:
+        with os.fdopen(fd, 'wb') as output:
+            os.fchmod(output.fileno(), mode)
+            output.write(data); output.flush(); os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary): os.unlink(temporary)
+try:
+    for path in (target.parent, wrapper.parent, share): checked(path, True)
+    info = checked(target); checked(wrapper)
+    if str(target) not in wrapper.read_text():
+        raise ValueError('Existing wrapper does not use this collector.')
+    previous = target.read_bytes(); desired = source.read_bytes()
+    compile(desired, str(target), 'exec')
+    current = hashlib.sha256(previous).hexdigest()
+    if desired == previous:
+        print('code unchanged; wrappers and schedules preserved')
+    else:
+        expected = os.environ.get('AGENT_MEMORY_EXPECTED_SHA256', '')
+        if not re.fullmatch(r'[0-9a-f]{64}', expected) or current != expected:
+            raise ValueError('Installed code does not match the approved preflight checksum.')
+        backup = target.parent / ('.code-only-backup-' + current + '.py')
+        if backup.exists():
+            checked(backup)
+            if backup.read_bytes() != previous: raise ValueError('Rollback code checksum mismatch.')
+        else:
+            replace(backup, previous, 0o600)
+        # Recheck before replacement to avoid overwriting concurrent maintenance.
+        fresh = checked(target)
+        if (fresh.st_dev, fresh.st_ino) != (info.st_dev, info.st_ino) or target.read_bytes() != previous:
+            raise ValueError('Installed code changed during deployment.')
+        replace(target, desired, stat.S_IMODE(info.st_mode))
+        print('code updated atomically; wrappers and schedules preserved')
+except (OSError, ValueError, SyntaxError) as error:
+    print('code-only installation refused: ' + str(error), file=sys.stderr)
+    sys.exit(1)
+PY
+fi
+[ "$#" -eq 0 ] || { echo 'usage: install.sh [--code-only]' >&2; exit 2; }
+HOST="${AGENT_MEMORY_HOST:?set AGENT_MEMORY_HOST to the fleet name}"
+ROLE="${AGENT_MEMORY_ROLE:-}"
+umask 077
 
 mkdir -p "$LIB" "$SHARE/out" "$SHARE/in" "$SHARE/logs" "$BIN"
 cp "$HERE/agent_memory.py" "$LIB/agent_memory.py"
@@ -104,4 +159,3 @@ else
   printf '%s\n' "unsupported uname: ${UNAME}" >&2
   exit 1
 fi
-

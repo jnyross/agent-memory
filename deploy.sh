@@ -2,6 +2,15 @@
 set -u
 cd "$(dirname "$0")"
 . ./lib.sh
+code_only=
+if [ "${1:-}" = --code-only ]; then
+  code_only=--code-only
+  shift
+  case "${AGENT_MEMORY_EXPECTED_SHA256:-}" in
+    ''|*[!0-9a-f]*) echo 'code-only deployment requires the approved AGENT_MEMORY_EXPECTED_SHA256' >&2; exit 2 ;;
+  esac
+  [ "${#AGENT_MEMORY_EXPECTED_SHA256}" -eq 64 ] || exit 2
+fi
 [ -z "$(git status --porcelain)" ] || { echo "working tree dirty" >&2; exit 1; }
 git fetch -q origin main
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "HEAD is not origin/main; push first" >&2; exit 1; }
@@ -27,6 +36,22 @@ failed=
 for h in "$@"; do
   role=$(fleet_role "$h")
   [ "$role" = hub ] || role=
+  if [ -n "$code_only" ]; then
+    if is_local "$h"; then
+      if sh install.sh --code-only; then echo "deployed code only: $h"; else failed="$failed $h"; fi
+    else
+      stage=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$h" 'umask 077; mktemp -d /tmp/agent-memory-code.XXXXXXXX') || { failed="$failed $h"; continue; }
+      case "$stage" in *[!a-zA-Z0-9/._-]*) echo "invalid staging path: $h" >&2; failed="$failed $h"; continue ;; esac
+      case "$stage" in /tmp/agent-memory-code.*) ;; *) echo "invalid staging path: $h" >&2; failed="$failed $h"; continue ;; esac
+      if scp -q agent_memory.py install.sh "$h:$stage/" && ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$h" "AGENT_MEMORY_EXPECTED_SHA256='$AGENT_MEMORY_EXPECTED_SHA256' sh '$stage/install.sh' --code-only"; then
+        echo "deployed code only: $h"
+      else
+        echo "FAIL $h" >&2; failed="$failed $h"
+      fi
+      ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$h" "rm -f '$stage/agent_memory.py' '$stage/install.sh'; rmdir '$stage'" || true
+    fi
+    continue
+  fi
   if is_local "$h"; then
     if [ "$role" = hub ]; then
       if AGENT_MEMORY_HOST=$h AGENT_MEMORY_ROLE=hub sh install.sh; then

@@ -13,6 +13,7 @@ import re
 import shutil
 import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -86,9 +87,46 @@ def user_home():
     return os.path.expanduser("~")
 
 
+def private_directory(path):
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    info = os.lstat(path)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        raise PermissionError("Memory directory must be owned by the current user.")
+    if stat.S_IMODE(info.st_mode) != 0o700:
+        os.chmod(path, 0o700)
+
+
+def private_open(path, flags):
+    fd = os.open(path, (flags & ~os.O_TRUNC) | getattr(os, "O_NOFOLLOW", 0) | os.O_NONBLOCK, 0o600)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+            raise PermissionError("Memory file must be a singly linked file owned by the current user.")
+        if stat.S_IMODE(info.st_mode) != 0o600:
+            os.fchmod(fd, 0o600)
+        if flags & os.O_TRUNC:
+            os.ftruncate(fd, 0)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def ensure_dirs(home):
+    private_directory(home)
     for part in ("out", "in", "logs"):
-        os.makedirs(os.path.join(home, part), exist_ok=True)
+        private_directory(os.path.join(home, part))
+    # Old senders can restore broad modes on inbound files; launchd/cron also
+    # open logs before the collector. Normalize only our known output paths.
+    paths = [os.path.join(home, name) for name in
+             ("lock", "state.json", "memory.jsonl", "memory.sqlite", "merge.sqlite")]
+    for folder, pattern in (("in", "*.jsonl"), ("out", "*.jsonl"), ("logs", "*.log")):
+        paths.extend(glob.glob(os.path.join(home, folder, pattern)))
+    for path in paths:
+        try:
+            os.close(private_open(path, os.O_RDONLY))
+        except FileNotFoundError:
+            pass  # A concurrent atomic replacement can remove the old path.
 
 
 def state_path(home):
@@ -113,7 +151,7 @@ def load_state(home):
 
 def atomic_write(path, data):
     directory = os.path.dirname(path)
-    os.makedirs(directory, exist_ok=True)
+    private_directory(directory)
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".tmp-")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -135,7 +173,7 @@ def save_state(home, state):
 
 def acquire_lock(home):
     path = os.path.join(home, "lock")
-    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+    fd = private_open(path, os.O_CREAT | os.O_RDWR)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -575,8 +613,8 @@ def _capture(home, host):
     state = load_state(home)
     status = {"malformed": 0, "errors": [], "files_tracked": 0, "emitted": 0}
     dest = out_path(home, host)
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    with open(dest, "a", encoding="utf-8") as out_fh:
+    private_directory(os.path.dirname(dest))
+    with os.fdopen(private_open(dest, os.O_WRONLY | os.O_APPEND | os.O_CREAT), "a", encoding="utf-8") as out_fh:
         capture_jsonl(home, host, state, out_fh, status)
         capture_hermes(home, host, state, out_fh, status)
         capture_opencode(home, host, state, out_fh, status)
@@ -598,8 +636,14 @@ def _capture(home, host):
 
 
 def rsync_cmd(extra, src, dest):
-    cmd = ["/usr/bin/rsync", "-az"] + extra + [src, dest]
+    # These transfers contain only private memory files. macOS openrsync accepts
+    # --chmod but can ignore it, so enforce modes on each local endpoint as well.
+    if ":" not in src:
+        os.close(private_open(src, os.O_RDONLY))
+    cmd = ["/usr/bin/rsync", "-az", "--chmod=Du=rwx,Dgo=,Fu=rw,Fgo="] + extra + [src, dest]
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if proc.returncode == 0 and ":" not in dest:
+        os.close(private_open(dest, os.O_RDONLY))
     return proc.returncode, proc.stderr.decode("utf-8", "replace")
 
 
@@ -651,6 +695,7 @@ def _merge(home):
             os.unlink(mem_path)
         for key in [k for k in state if isinstance(k, str) and k.startswith("merge:")]:
             del state[key]
+        os.close(private_open(merge_db, os.O_CREAT | os.O_RDWR))
         init = sqlite3.connect(merge_db)
         try:
             init.execute(
@@ -664,6 +709,7 @@ def _merge(home):
             init.commit()
         finally:
             init.close()
+    os.close(private_open(merge_db, os.O_RDWR))
     con = sqlite3.connect(merge_db)
     data = b""
     status = {"malformed": 0, "errors": []}
@@ -705,7 +751,7 @@ def _merge(home):
                 continue
         data = buf.getvalue().encode("utf-8")
         if data:
-            fd = os.open(mem_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+            fd = private_open(mem_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
             try:
                 view = memoryview(data)
                 while len(view):
@@ -717,7 +763,9 @@ def _merge(home):
     finally:
         con.close()
     if data:
-        shutil.copyfile(merge_db, memory_sqlite + ".tmp")
+        with open(merge_db, "rb") as source:
+            with os.fdopen(private_open(memory_sqlite + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC), "wb") as destination:
+                shutil.copyfileobj(source, destination)
         os.replace(memory_sqlite + ".tmp", memory_sqlite)
     state.update({"merge:" + p: c for p, c in cursors.items()})
     meta = state.get("_meta") or {}
@@ -931,7 +979,11 @@ def build_parser():
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
-    return args.func(args)
+    previous_umask = os.umask(0o077)
+    try:
+        return args.func(args)
+    finally:
+        os.umask(previous_umask)
 
 
 if __name__ == "__main__":
