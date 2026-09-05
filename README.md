@@ -24,6 +24,14 @@ and synchronization preserve these permissions without changing conversation
 text. Before upgrading an existing installation, verify its configured readers
 run as the owner; do not apply this policy to an unverified shared store.
 
+On a hub, every sender must also preserve private transfer permissions. An old
+sender using `rsync -a` can reset an incoming file to its source permissions
+between hub cycles. The collector normalizes known files on its next cycle,
+but that does not guarantee continuous 0600 modes with old senders. Defer the
+hub permission rollout while any sender's compatibility is unverified; leaf
+installations can still keep their own store private when pulling from an old
+hub.
+
 On disk, under `~/.local/share/agent-memory` (or `$AGENT_MEMORY_HOME`):
 
 - `out/<host>.jsonl` — this machine's capture
