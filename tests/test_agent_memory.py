@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
+import stat
 import sys
 import tempfile
 import unittest
@@ -26,6 +28,16 @@ def dump(path, rows):
                     fh.write("\n")
             else:
                 fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def write(path, text):
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+def read(path):
+    with open(path, "r", encoding="utf-8") as fh:
+        return fh.read()
 
 
 def load_out(home, host):
@@ -63,6 +75,38 @@ class MemoryTest(unittest.TestCase):
         os.environ["AGENT_MEMORY_ROLE"] = "hub"
         os.environ["AGENT_MEMORY_HOST"] = "agent-box"
         self.assertEqual(am.main(["merge"]), 0)
+
+    def fake_hub(self, facts):
+        # A local directory stands in for the hub, so pull runs the real rsync.
+        hub = os.path.join(self.tmp.name, "hub")
+        shutil.rmtree(hub, ignore_errors=True)
+        os.makedirs(os.path.join(hub, "in"))  # cycle pushes here before it pulls
+        dump(os.path.join(hub, "memory.jsonl"), [{"key": "omp/s/1", "text": "hub record"}])
+        write(os.path.join(hub, "memory.sqlite"), "index")
+        self.write_hub_facts(facts)
+        real = am.remote
+        am.remote = lambda path: os.path.join(hub, path)
+        self.addCleanup(setattr, am, "remote", real)
+        return hub
+
+    def write_hub_facts(self, facts):
+        path = os.path.join(self.tmp.name, "hub", "facts")
+        shutil.rmtree(path, ignore_errors=True)
+        if facts is None:
+            return
+        os.makedirs(path)
+        for name, text in facts.items():
+            write(os.path.join(path, name), text)
+
+    def leaf_facts(self):
+        path = os.path.join(self.home, "facts")
+        if not os.path.isdir(path):
+            return None
+        return dict((name, read(os.path.join(path, name))) for name in os.listdir(path))
+
+    def assertNoFactsLeftovers(self):
+        left = [name for name in os.listdir(self.home) if name.startswith(".facts")]
+        self.assertEqual(left, [])
 
     def test_to_ts_formats(self):
         self.assertRegex(am.to_ts("2026-09-01T12:00:00.000Z"), TS_RE)
@@ -785,6 +829,55 @@ class MemoryTest(unittest.TestCase):
         hits = [json.loads(line) for line in buf.getvalue().splitlines()]
         self.assertEqual(len(hits), 1)
         self.assertIn("[repeat prescription]", hits[0]["snippet"])
+
+    def test_pull_and_cycle_mirror_hub_facts_with_private_modes(self):
+        hub = self.fake_hub({"permanent.md": "john\n", "cars.md": "old car\n"})
+        self.assertEqual(am.main(["pull"]), 0)
+        self.assertEqual(self.leaf_facts(), {"permanent.md": "john\n", "cars.md": "old car\n"})
+        facts = os.path.join(self.home, "facts")
+        self.assertEqual(stat.S_IMODE(os.stat(facts).st_mode), 0o700)
+        for name in ("permanent.md", "cars.md"):
+            mode = stat.S_IMODE(os.stat(os.path.join(facts, name)).st_mode)
+            self.assertEqual(mode, 0o600, name)
+        write(os.path.join(hub, "facts", "cars.md"), "new car facts\n")
+        self.assertEqual(am.main(["cycle"]), 0)
+        self.assertEqual(self.leaf_facts()["cars.md"], "new car facts\n")
+        self.assertNoFactsLeftovers()
+
+    def test_pull_removes_facts_the_hub_deleted(self):
+        hub = self.fake_hub({"permanent.md": "john\n", "cars.md": "old car\n"})
+        self.assertEqual(am.main(["pull"]), 0)
+        os.unlink(os.path.join(hub, "facts", "cars.md"))
+        self.assertEqual(am.main(["pull"]), 0)
+        self.assertEqual(self.leaf_facts(), {"permanent.md": "john\n"})
+        self.assertNoFactsLeftovers()
+
+    def test_pull_succeeds_when_the_hub_has_no_facts(self):
+        self.fake_hub(None)
+        self.assertEqual(am.main(["pull"]), 0)
+        self.assertIsNone(self.leaf_facts())
+        self.assertEqual(
+            read(os.path.join(self.home, "memory.jsonl")),
+            '{"key": "omp/s/1", "text": "hub record"}\n',
+        )
+        self.assertEqual(read(os.path.join(self.home, "memory.sqlite")), "index")
+        self.assertNoFactsLeftovers()
+
+    def test_hub_facts_without_the_sentinel_never_replace_the_leaf_copy(self):
+        self.fake_hub({"cars.md": "only cars\n"})
+        self.assertEqual(am.main(["pull"]), 0)
+        self.assertIsNone(self.leaf_facts())
+        self.write_hub_facts({"permanent.md": "john\n", "cars.md": "only cars\n"})
+        self.assertEqual(am.main(["pull"]), 0)
+        mirrored = {"permanent.md": "john\n", "cars.md": "only cars\n"}
+        self.assertEqual(self.leaf_facts(), mirrored)
+        self.write_hub_facts({})
+        self.assertEqual(am.main(["pull"]), 0)
+        self.assertEqual(self.leaf_facts(), mirrored)
+        self.write_hub_facts(None)
+        self.assertEqual(am.main(["pull"]), 0)
+        self.assertEqual(self.leaf_facts(), mirrored)
+        self.assertNoFactsLeftovers()
 
     def test_lock_exits_zero(self):
         am.ensure_dirs(self.home)

@@ -65,6 +65,9 @@ HERMES_GLOBS = ("~/.hermes/state.db", "~/.hermes/profiles/*/state.db")
 OPENCODE_GLOBS = ("~/.local/share/opencode/opencode.db",)
 HUB_HOST = "agent-box"
 REMOTE_HOME = "~/.local/share/agent-memory"
+PULL_FILES = ("memory.jsonl", "memory.sqlite")
+FACTS_SENTINEL = "permanent.md"
+RSYNC_NO_SOURCE = 23
 OPENCODE_GRACE_MS = 120000
 GUARD_BYTES = 64
 
@@ -635,15 +638,28 @@ def _capture(home, host):
     return 0
 
 
-def rsync_cmd(extra, src, dest):
+def private_tree(path):
+    private_directory(path)
+    for folder, subfolders, names in os.walk(path):
+        for name in subfolders:
+            private_directory(os.path.join(folder, name))
+        for name in names:
+            os.close(private_open(os.path.join(folder, name), os.O_RDONLY))
+
+
+def rsync_cmd(extra, src, dest, directory=False):
     # These transfers contain only private memory files. macOS openrsync accepts
     # --chmod but can ignore it, so enforce modes on each local endpoint as well.
-    if ":" not in src:
+    # A directory endpoint is not a regular file, so walk its tree instead.
+    if ":" not in src and not directory:
         os.close(private_open(src, os.O_RDONLY))
     cmd = ["/usr/bin/rsync", "-az", "--chmod=Du=rwx,Dgo=,Fu=rw,Fgo="] + extra + [src, dest]
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if proc.returncode == 0 and ":" not in dest:
-        os.close(private_open(dest, os.O_RDONLY))
+        if directory:
+            private_tree(dest)
+        else:
+            os.close(private_open(dest, os.O_RDONLY))
     return proc.returncode, proc.stderr.decode("utf-8", "replace")
 
 
@@ -789,6 +805,44 @@ def cmd_merge(_args):
         os.close(lock)
 
 
+def pull_facts(home):
+    # The hub owns facts/; the leaf copy is a replaceable read-only mirror. Sync
+    # into a sibling and swap, so a missing, empty or sentinel-less hub copy
+    # leaves the existing mirror alone instead of --delete wiping it.
+    staged = os.path.join(home, ".facts.staged")
+    replaced = os.path.join(home, ".facts.replaced")
+    shutil.rmtree(staged, ignore_errors=True)
+    try:
+        private_directory(staged)
+        code, err = rsync_cmd(["--delete"], remote("facts") + "/", staged, directory=True)
+        # 23 also means a partial transfer; only a missing source is benign.
+        if code == RSYNC_NO_SOURCE and "No such file" in err:
+            return 0  # The hub has no facts/ yet.
+        if code != 0:
+            sys.stderr.write(err)
+            return 1
+        if not os.path.exists(os.path.join(staged, FACTS_SENTINEL)):
+            return 0
+        facts = os.path.join(home, "facts")
+        shutil.rmtree(replaced, ignore_errors=True)
+        if os.path.exists(facts):
+            os.rename(facts, replaced)
+        os.rename(staged, facts)
+        return 0
+    finally:
+        shutil.rmtree(staged, ignore_errors=True)
+        shutil.rmtree(replaced, ignore_errors=True)
+
+
+def _pull(home):
+    for name in PULL_FILES:
+        code, err = rsync_cmd([], remote(name), os.path.join(home, name))
+        if code != 0:
+            sys.stderr.write(err)
+            return 1
+    return pull_facts(home)
+
+
 def cmd_pull(_args):
     home = mem_home()
     ensure_dirs(home)
@@ -796,13 +850,7 @@ def cmd_pull(_args):
     if lock is None:
         return 0
     try:
-        for name in ("memory.jsonl", "memory.sqlite"):
-            dest = os.path.join(home, name)
-            code, err = rsync_cmd([], remote(name), dest)
-            if code != 0:
-                sys.stderr.write(err)
-                return 1
-        return 0
+        return _pull(home)
     finally:
         os.close(lock)
 
@@ -948,14 +996,7 @@ def cmd_cycle(_args):
         code = cmd_push(_args)
         if code != 0:
             return code
-        # pull without taking a second lock
-        for name in ("memory.jsonl", "memory.sqlite"):
-            dest = os.path.join(home, name)
-            pcode, err = rsync_cmd([], remote(name), dest)
-            if pcode != 0:
-                sys.stderr.write(err)
-                return 1
-        return 0
+        return _pull(home)  # pull without taking a second lock
     finally:
         os.close(lock)
 
