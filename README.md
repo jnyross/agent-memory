@@ -40,7 +40,7 @@ On disk, under `~/.local/share/agent-memory` (or `$AGENT_MEMORY_HOME`):
 - `merge.sqlite` — hub working index (keys + FTS5)
 - `memory.sqlite` — disposable FTS5 index
 - `state.json` — tail cursors and sqlite high-water marks
-- `facts/` — read-only mirror of the hub's `facts/`, replaced on pull only when the hub copy holds `permanent.md`
+- `facts/` — read-only mirror of the hub's `facts/`, replaced on pull only when the hub copy holds `brief.md`
 
 Host id is `$AGENT_MEMORY_HOST`, else the short hostname. The hub is `agent-box` with `$AGENT_MEMORY_ROLE=hub`.
 

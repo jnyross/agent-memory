@@ -831,12 +831,12 @@ class MemoryTest(unittest.TestCase):
         self.assertIn("[repeat prescription]", hits[0]["snippet"])
 
     def test_pull_and_cycle_mirror_hub_facts_with_private_modes(self):
-        hub = self.fake_hub({"permanent.md": "john\n", "cars.md": "old car\n"})
+        hub = self.fake_hub({"brief.md": "john\n", "cars.md": "old car\n"})
         self.assertEqual(am.main(["pull"]), 0)
-        self.assertEqual(self.leaf_facts(), {"permanent.md": "john\n", "cars.md": "old car\n"})
+        self.assertEqual(self.leaf_facts(), {"brief.md": "john\n", "cars.md": "old car\n"})
         facts = os.path.join(self.home, "facts")
         self.assertEqual(stat.S_IMODE(os.stat(facts).st_mode), 0o700)
-        for name in ("permanent.md", "cars.md"):
+        for name in ("brief.md", "cars.md"):
             mode = stat.S_IMODE(os.stat(os.path.join(facts, name)).st_mode)
             self.assertEqual(mode, 0o600, name)
         write(os.path.join(hub, "facts", "cars.md"), "new car facts\n")
@@ -845,11 +845,11 @@ class MemoryTest(unittest.TestCase):
         self.assertNoFactsLeftovers()
 
     def test_pull_removes_facts_the_hub_deleted(self):
-        hub = self.fake_hub({"permanent.md": "john\n", "cars.md": "old car\n"})
+        hub = self.fake_hub({"brief.md": "john\n", "cars.md": "old car\n"})
         self.assertEqual(am.main(["pull"]), 0)
         os.unlink(os.path.join(hub, "facts", "cars.md"))
         self.assertEqual(am.main(["pull"]), 0)
-        self.assertEqual(self.leaf_facts(), {"permanent.md": "john\n"})
+        self.assertEqual(self.leaf_facts(), {"brief.md": "john\n"})
         self.assertNoFactsLeftovers()
 
     def test_pull_succeeds_when_the_hub_has_no_facts(self):
@@ -867,9 +867,9 @@ class MemoryTest(unittest.TestCase):
         self.fake_hub({"cars.md": "only cars\n"})
         self.assertEqual(am.main(["pull"]), 0)
         self.assertIsNone(self.leaf_facts())
-        self.write_hub_facts({"permanent.md": "john\n", "cars.md": "only cars\n"})
+        self.write_hub_facts({"brief.md": "john\n", "cars.md": "only cars\n"})
         self.assertEqual(am.main(["pull"]), 0)
-        mirrored = {"permanent.md": "john\n", "cars.md": "only cars\n"}
+        mirrored = {"brief.md": "john\n", "cars.md": "only cars\n"}
         self.assertEqual(self.leaf_facts(), mirrored)
         self.write_hub_facts({})
         self.assertEqual(am.main(["pull"]), 0)
